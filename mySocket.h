@@ -4,7 +4,12 @@
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
-
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <arpa/inet.h>
 #include <string>
 #include <vector>
 #include <cstring>

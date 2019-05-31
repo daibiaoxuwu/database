@@ -9,13 +9,13 @@
 #include<map>
 #include<cmath>
 #include<queue>
-#include"metis.h"
+#include<sys/time.h>
+#include<metis.h>
 #include<cassert>
 #include"mySocket.h"
-idx_t times[10];//辅助计时变量；
-idx_t cnt_type0,cnt_type1;
-#define max(A,B) (A>B?A:B)
-#define min(A,B) (A<B?A:B)
+int times[10];//辅助计时变量；
+int cnt_type0,cnt_type1;
+
 using namespace std;
 const bool DEBUG_=false;
 const bool Optimization_G_tree_Search=true;//是否开启全连接加速算法
@@ -23,25 +23,28 @@ const bool Optimization_KNN_Cut=true;//是否开启KNN剪枝查询算法
 const bool Optimization_Euclidean_Cut=false;//是否开启Catch查询中基于欧几里得距离剪枝算法
 const char Edge_File[]="../data/road.nedge";//第一行两个整数n,m表示点数和边数，接下来m行每行三个整数U,V,C表示U->V有一条长度为C的边
 const char Node_File[]="../data/road.cnode";//共N行每行一个整数两个实数id,x,y表示id结点的经纬度(但输入不考虑id，只顺序从0读到n-1，整数N在Edge文件里)
-const idx_t Global_Scheduling_Cars_Per_Request=30000000;//每次规划精确计算前至多保留的车辆数目(时间开销)
+const int Global_Scheduling_Cars_Per_Request=30000000;//每次规划精确计算前至多保留的车辆数目(时间开销)
 const double Unit=0.1;//路网文件的单位长度/m
 const double R_earth=6371000.0;//地球半径，用于输入经纬度转化为x,y坐标
 const double PI=acos(-1.0);
-const idx_t Partition_Part=4;//K叉树
-long long Additional_Memory=0;//用于构建辅助矩阵的额外空间(idx_t)
-const idx_t Naive_Split_Limit=33;//子图规模小于该数值全划分
-const idx_t INF=0x3fffffff;//无穷大常量
+const int Partition_Part=4;//K叉树
+long long Additional_Memory=0;//用于构建辅助矩阵的额外空间(int)
+const int Naive_Split_Limit=33;//子图规模小于该数值全划分
+const int INF=0x3fffffff;//无穷大常量
 const bool RevE=true;//false代表有向图，true代表无向图读入边复制反向一条边
 const bool Distance_Offset=false;//KNN是否考虑车辆距离结点的修正距离
 const bool DEBUG1=false;
-
+#define TIME_TICK_START gettimeofday( &tv, NULL ); ts = tv.tv_sec * 100000 + tv.tv_usec / 10;
+#define TIME_TICK_END gettimeofday( &tv, NULL ); te = tv.tv_sec * 100000 + tv.tv_usec / 10;
+#define TIME_TICK_PRINT(T) printf("%s RESULT: %lld (0.01MS)\r\n", (#T), te - ts );
+struct timeval tv;
 long long ts, te;
-static idx_t rootp = 0;
+static int rootp = 0;
 struct Heap//双指针大根堆
 {
 	Heap(){clear();}
-	idx_t n;
-	vector<idx_t>id,iid,a;//id[i]表示编号为i的元素在a中的位置，iid[i]表示a[i]的id（id:[0~n-1],a/iid:[1~n]）
+	int n;
+	vector<int>id,iid,a;//id[i]表示编号为i的元素在a中的位置，iid[i]表示a[i]的id（id:[0~n-1],a/iid:[1~n]）
 	void clear()
 	{
 		n=1;
@@ -51,14 +54,14 @@ struct Heap//双指针大根堆
 		iid.push_back(0);
 		a.push_back(0);
 	}
-	void swap_(idx_t x,idx_t y)//交换a,id,iid
+	void swap_(int x,int y)//交换a,id,iid
 	{
 		swap(a[x],a[y]);
 		id[iid[x]]=y;
 		id[iid[y]]=x;
 		swap(iid[x],iid[y]);
 	}
-	void up(idx_t x)//向上调整a[x]至合适位置
+	void up(int x)//向上调整a[x]至合适位置
 	{
 		while(x>1)
 		{
@@ -66,33 +69,33 @@ struct Heap//双指针大根堆
 			else return;
 		}
 	}
-	void down(idx_t x)//向上调整a[x]至合适位置
+	void down(int x)//向上调整a[x]至合适位置
 	{
 		while((x<<1)<n)
 		{
-			idx_t k;
+			int k;
 			if((x<<1)+1>=n||a[x<<1]>a[(x<<1)+1])k=x<<1;
 			else k=(x<<1)+1;
 			if(a[x]<a[k]){swap_(x,k);x=k;}
 			else return;
 		}
 	}
-	idx_t top(){return a[1];}
-	idx_t top_id(){return iid[1];}
-	idx_t size(){return n;}
-	void change(idx_t x,idx_t num)//将编号x的点改为num
+	int top(){return a[1];}
+	int top_id(){return iid[1];}
+	int size(){return n;}
+	void change(int x,int num)//将编号x的点改为num
 	{
 		a[id[x]]=num;
 		up(id[x]);
 		down(id[x]);
 	}
-	void add(idx_t x,idx_t num)//向编号x的点加num
+	void add(int x,int num)//向编号x的点加num
 	{
 		a[id[x]]+=num;
 		up(id[x]);
 		down(id[x]);
 	}
-	void push(idx_t num)//压入一个数值为num的元素
+	void push(int num)//压入一个数值为num的元素
 	{
 		id.push_back(n);
 		iid.push_back(n-1);
@@ -103,22 +106,22 @@ struct Heap//双指针大根堆
 	void draw()
 	{
 		printf("Heap:%d n=%d\n",this,n-1);
-		printf("a:");for(idx_t i=1;i<n;i++)printf(" %d",a[i]);cout<<endl;
-		printf("id:");for(idx_t i=1;i<n-1;i++)printf(" %d",id[i]);cout<<endl;
-		printf("iid:");for(idx_t i=1;i<n;i++)printf(" %d",iid[i]);cout<<endl;
+		printf("a:");for(int i=1;i<n;i++)printf(" %d",a[i]);cout<<endl;
+		printf("id:");for(int i=1;i<n-1;i++)printf(" %d",id[i]);cout<<endl;
+		printf("iid:");for(int i=1;i<n;i++)printf(" %d",iid[i]);cout<<endl;
 		printf("draw_end\n");
 	}
 };
-void save_vector(const vector<idx_t> &v)
+void save_vector(const vector<int> &v)
 {
-	printf("%d ",(idx_t)v.size());
-	for(idx_t i=0;i<(idx_t)v.size();i++)printf("%d ",v[i]);
+	printf("%d ",(int)v.size());
+	for(int i=0;i<(int)v.size();i++)printf("%d ",v[i]);
 	printf("\n");
 }
-void load_vector(vector<idx_t> &v)
+void load_vector(vector<int> &v)
 {
 	v.clear();
-	idx_t n,i,j;
+	int n,i,j;
 	scanf("%d",&n);
 	for(i=0;i<n;i++)
 	{
@@ -126,34 +129,34 @@ void load_vector(vector<idx_t> &v)
 		v.push_back(j);
 	}
 }
-void save_vector_vector(const vector<vector<idx_t> > &v)
+void save_vector_vector(const vector<vector<int> > &v)
 {
-	printf("%d\n",(idx_t)v.size());
-	for(idx_t i=0;i<(idx_t)v.size();i++)save_vector(v[i]);
+	printf("%d\n",(int)v.size());
+	for(int i=0;i<(int)v.size();i++)save_vector(v[i]);
 	printf("\n");
 }
-void load_vector_vector(vector<vector<idx_t> > &v)
+void load_vector_vector(vector<vector<int> > &v)
 {
 	v.clear();
-	idx_t n,i,j;
+	int n,i,j;
 	scanf("%d",&n);
-	vector<idx_t>ls;
+	vector<int>ls;
 	for(i=0;i<n;i++)
 	{
 		load_vector(ls);
 		v.push_back(ls);
 	}
 }
-void save_vector_pair(const vector<pair<idx_t,idx_t> > &v)
+void save_vector_pair(const vector<pair<int,int> > &v)
 {
-	printf("%d ",(idx_t)v.size());
-	for(idx_t i=0;i<(idx_t)v.size();i++)printf("%d %d ",v[i].first,v[i].second);
+	printf("%d ",(int)v.size());
+	for(int i=0;i<(int)v.size();i++)printf("%d %d ",v[i].first,v[i].second);
 	printf("\n");
 }
-void load_vector_pair(vector<pair<idx_t,idx_t> > &v)
+void load_vector_pair(vector<pair<int,int> > &v)
 {
 	v.clear();
-	idx_t n,i,j,k;
+	int n,i,j,k;
 	scanf("%d",&n);
 	for(i=0;i<n;i++)
 	{
@@ -161,16 +164,16 @@ void load_vector_pair(vector<pair<idx_t,idx_t> > &v)
 		v.push_back(make_pair(j,k));
 	}
 }
-void save_map_idx_t_pair(map<idx_t,pair<idx_t,idx_t> > &h)
+void save_map_int_pair(map<int,pair<int,int> > &h)
 {
 	printf("%d\n",h.size());
-	map<idx_t,pair<idx_t,idx_t> >::iterator iter;
+	map<int,pair<int,int> >::iterator iter;
 	for(iter=h.begin();iter!=h.end();iter++)
 		printf("%d %d %d\n",iter->first,iter->second.first,iter->second.second);
 }
-void load_map_idx_t_pair(map<idx_t,pair<idx_t,idx_t> > &h)
+void load_map_int_pair(map<int,pair<int,int> > &h)
 {
-	idx_t n,i,j,k,l;
+	int n,i,j,k,l;
 	scanf("%d",&n);
 	for(i=0;i<n;i++)
 	{
@@ -178,16 +181,16 @@ void load_map_idx_t_pair(map<idx_t,pair<idx_t,idx_t> > &h)
 		h[j]=make_pair(k,l);
 	}
 }
-void save_map_idx_t_idx_t(map<idx_t,idx_t> &h)
+void save_map_int_int(map<int,int> &h)
 {
 	printf("%d\n",h.size());
-	map<idx_t,idx_t>::iterator iter;
+	map<int,int>::iterator iter;
 	for(iter=h.begin();iter!=h.end();iter++)
 		printf("%d %d\n",iter->first,iter->second);
 }
-void load_map_idx_t_idx_t(map<idx_t,idx_t> &h)
+void load_map_int_int(map<int,int> &h)
 {
-	idx_t n,i,j,k;
+	int n,i,j,k;
 	scanf("%d",&n);
 	for(i=0;i<n;i++)
 	{
@@ -223,16 +226,16 @@ double Distance_(double a1,double b1,double a2,double b2 )
 	A_B= 2 * asin(AB /(2*R_earth)) * R_earth;
 	return A_B;
 }
-double Euclidean_Dist(idx_t S,idx_t T)//计算节点S,T的欧几里得距离在路网数据中的长度
+double Euclidean_Dist(int S,int T)//计算节点S,T的欧几里得距离在路网数据中的长度
 {
 	return Distance_(coordinate[S].x,coordinate[S].y,coordinate[T].x,coordinate[T].y)/Unit;
 }
 struct Graph//无向图结构
 {
-	idx_t n,m;//n个点m条边 点从0编号到n-1
-	idx_t tot;
-	vector<idx_t>id;//id[i]为子图中i点在原图中的真实编号
-	vector<idx_t>head,list,next,cost;//邻接表
+	int n,m;//n个点m条边 点从0编号到n-1
+	int tot;
+	vector<int>id;//id[i]为子图中i点在原图中的真实编号
+	vector<int>head,list,next,cost;//邻接表
 	Graph(){clear();}
 	~Graph(){clear();}
 	void save()//保存结构信息(stdout输出)
@@ -253,7 +256,7 @@ struct Graph//无向图结构
 		load_vector(next);
 		load_vector(cost);
 	}
-	void add_D(idx_t a,idx_t b,idx_t c)//加入一条a->b权值为c的有向边
+	void add_D(int a,int b,int c)//加入一条a->b权值为c的有向边
 	{
 		tot++;
 		list[tot]=b;
@@ -261,21 +264,21 @@ struct Graph//无向图结构
 		next[tot]=head[a];
 		head[a]=tot;
 	}
-	void add(idx_t a,idx_t b,idx_t c)//加入一条a<->b权值为c的无向边
+	void add(int a,int b,int c)//加入一条a<->b权值为c的无向边
 	{
 		add_D(a,b,c);
 		add_D(b,a,c);
 	}
-	void init(idx_t N,idx_t M,idx_t t=1)
+	void init(int N,int M,int t=1)
 	{
 		clear();
 		n=N;m=M;
 		tot=t;
-		head=vector<idx_t>(N);
-		id=vector<idx_t>(N);
-		list=vector<idx_t>(M*2+2);
-		next=vector<idx_t>(M*2+2);
-		cost=vector<idx_t>(M*2+2);
+		head=vector<int>(N);
+		id=vector<int>(N);
+		list=vector<int>(M*2+2);
+		next=vector<int>(M*2+2);
+		cost=vector<int>(M*2+2);
 	}
 	void clear()
 	{
@@ -289,23 +292,23 @@ struct Graph//无向图结构
 	void draw()//输出图结构
 	{
 		printf("Graph:%d n=%d m=%d\n",this,n,m);
-		for(idx_t i=0;i<n;i++)cout<<id[i]<<' ';cout<<endl;
-		for(idx_t i=0;i<n;i++)
+		for(int i=0;i<n;i++)cout<<id[i]<<' ';cout<<endl;
+		for(int i=0;i<n;i++)
 		{
 			printf("%d:",i);
-			for(idx_t j=head[i];j;j=next[j])printf(" %d",list[j]);
+			for(int j=head[i];j;j=next[j])printf(" %d",list[j]);
 			cout<<endl;
 		}
 		printf("Graph_draw_end\n");
 	}
 	//图划分算法
-	vector<idx_t>color;//01染色数组
-	vector<idx_t>con;//连通性
-	vector<idx_t> Split(Graph *G[],idx_t nparts)//将子图一分为二返回color数组，并将两部分分别存至G1，G2 METIS algorithm,npart表示划分块数
+	vector<int>color;//01染色数组
+	vector<int>con;//连通性
+	vector<int> Split(Graph *G[],int nparts)//将子图一分为二返回color数组，并将两部分分别存至G1，G2 METIS algorithm,npart表示划分块数
 	{
 
-		vector<idx_t>color(n);
-		idx_t i;
+		vector<int>color(n);
+		int i;
 		/*if(n<Naive_Split_Limit)
 		{
 			return Split_Naive(*G[0],*G[1]);
@@ -340,26 +343,26 @@ struct Graph//无向图结构
 			idx_t nvtxs=n;
 			idx_t ncon=1;
 			//transform
-			idx_t *xadj = new idx_t[n + 1];
-			idx_t *adj=new idx_t[n+1];
-			idx_t *adjncy = new idx_t[tot-1];
-			idx_t *adjwgt = new idx_t[tot-1];
-			idx_t *part = new idx_t[n];
+			int *xadj = new idx_t[n + 1];
+			int *adj=new idx_t[n+1];
+			int *adjncy = new idx_t[tot-1];
+			int *adjwgt = new idx_t[tot-1];
+			int *part = new idx_t[n];
 
 
-			idx_t xadj_pos = 1;
-			idx_t xadj_accum = 0;
-			idx_t adjncy_pos = 0;
+			int xadj_pos = 1;
+			int xadj_accum = 0;
+			int adjncy_pos = 0;
 
 			// xadj, adjncy, adjwgt
 			xadj[0] = 0;
-			idx_t i = 0;
-			for (idx_t i=0;i<n;i++){
+			int i = 0;
+			for (int i=0;i<n;i++){
 				// init node map
 
-				/*idx_t fanout = Nodes[nid].adjnodes.size();
-				for ( idx_t j = 0; j < fanout; j++ ){
-					idx_t enid = Nodes[nid].adjnodes[j];
+				/*int fanout = Nodes[nid].adjnodes.size();
+				for ( int j = 0; j < fanout; j++ ){
+					int enid = Nodes[nid].adjnodes[j];
 					// ensure edges within
 					if ( nset.find( enid ) != nset.end() ){
 						xadj_accum ++;
@@ -370,9 +373,9 @@ struct Graph//无向图结构
 					}
 				}
 				xadj[xadj_pos++] = xadj_accum;*/
-				for(idx_t j=head[i];j;j=next[j])
+				for(int j=head[i];j;j=next[j])
 				{
-					idx_t enid = list[j];
+					int enid = list[j];
 					xadj_accum ++;
 					adjncy[adjncy_pos] = enid;
 					adjwgt[adjncy_pos] = cost[j];
@@ -385,12 +388,12 @@ struct Graph//无向图结构
 			// adjust nodes number started by 0
 
 			// adjwgt -> 1
-			for ( idx_t i = 0; i < adjncy_pos; i++ ){
+			for ( int i = 0; i < adjncy_pos; i++ ){
 				adjwgt[i] = 1;
 			}
 
 			// nparts
-			idx_t objval=0;
+			int objval=0;
 			//METIS
 			METIS_PartGraphKway(
 				&nvtxs,
@@ -407,7 +410,7 @@ struct Graph//无向图结构
 				&objval,
 				part
 			);
-			for(idx_t i=0;i<n;i++)color[i]=part[i];
+			for(int i=0;i<n;i++)color[i]=part[i];
 			delete [] xadj;
 			delete [] adj;
 			delete [] adjncy;
@@ -415,16 +418,16 @@ struct Graph//无向图结构
 			delete [] part;
 		}
 		//划分
-		idx_t j;
-		vector<idx_t>new_id;
-		vector<idx_t>tot(nparts,0),m(nparts,0);
+		int j;
+		vector<int>new_id;
+		vector<int>tot(nparts,0),m(nparts,0);
 		for(i=0;i<n;i++)
 			new_id.push_back(tot[color[i]]++);
 		for(i=0;i<n;i++)
 			for(j=head[i];j;j=next[j])
 				if(color[list[j]]==color[i])
 					m[color[i]]++;
-		for(idx_t t=0;t<nparts;t++)
+		for(int t=0;t<nparts;t++)
 		{
 			(*G[t]).init(tot[t],m[t]);
 			for(i=0;i<n;i++)
@@ -439,12 +442,12 @@ struct Graph//无向图结构
 		if(DEBUG1)printf("Split_over\n");
 		return color;
 	}
-	vector<idx_t> Split_Naive(Graph &G1,Graph &G2)//将子图一分为二返回color数组，并将两部分分别存至G1，G2 Kernighan-Lin algorithm
+	vector<int> Split_Naive(Graph &G1,Graph &G2)//将子图一分为二返回color数组，并将两部分分别存至G1，G2 Kernighan-Lin algorithm
 	{
 		color.clear();
 		con.clear();
 		if(DEBUG1)printf("Begin Split\n");
-		idx_t i,j,k=n/2,l;
+		int i,j,k=n/2,l;
 		for(i=0;i<n;i++)//初始随机染色
 		{
 			if(n-i==k/*||(k&&rand()&1)*/){color.push_back(1);k--;}
@@ -462,7 +465,7 @@ struct Graph//无向图结构
 		if(DEBUG1)printf("Split_Con over\n");
 
 		//优先队列划分,每个点的分数邻域不同数量-相同数量
-		Heap q[2];idx_t ans=0;
+		Heap q[2];int ans=0;
 		for(i=0;i<n;i++)
 		{
 			k=0;
@@ -478,7 +481,7 @@ struct Graph//无向图结构
 		if(DEBUG1)cout<<"start_ans="<<ans<<endl;
 		while(q[0].top()+q[1].top()>0)
 		{
-			idx_t save_ans=ans;
+			int save_ans=ans;
 			for(l=0;l<2;l++)
 			{
 				i=q[l].top_id();
@@ -501,7 +504,7 @@ struct Graph//无向图结构
 		//DEBUG
 		if(DEBUG1)
 		{
-			idx_t border_num=0;
+			int border_num=0;
 			for(i=0;i<n;i++)
 				for(j=head[i];j;j=next[j])
 					if(color[i]!=color[list[j]]){border_num++;break;}
@@ -510,9 +513,9 @@ struct Graph//无向图结构
 		//for(i=0;i<n;i++)cout<<"i="<<i<<" color="<<color[i]<<endl;
 
 		//划分
-		vector<idx_t>new_id;
-		idx_t tot0=0,tot1=0;
-		idx_t m1=0,m0=0;
+		vector<int>new_id;
+		int tot0=0,tot1=0;
+		int m1=0,m0=0;
 		for(i=0;i<n;i++)
 		{
 			if(color[i]==0)new_id.push_back(tot0++);
@@ -546,7 +549,7 @@ struct Graph//无向图结构
 		if(DEBUG1)printf("Split_over\n");
 		return color;
 	}
-	idx_t Split_Borders(idx_t nparts)//将该图划分为nparts块后会产生的border数
+	int Split_Borders(int nparts)//将该图划分为nparts块后会产生的border数
 	{
 		if(n<Naive_Split_Limit)
 		{
@@ -573,25 +576,25 @@ struct Graph//无向图结构
 		}
 		idx_t nvtxs=n;
 		idx_t ncon=1;
-		vector<idx_t>color(n);
-		idx_t *xadj = new idx_t[n + 1];
-		idx_t *adj=new idx_t[n+1];
-		idx_t *adjncy = new idx_t[tot-1];
-		idx_t *adjwgt = new idx_t[tot-1];
-		idx_t *part = new idx_t[n];
+		vector<int>color(n);
+		int *xadj = new idx_t[n + 1];
+		int *adj=new idx_t[n+1];
+		int *adjncy = new idx_t[tot-1];
+		int *adjwgt = new idx_t[tot-1];
+		int *part = new idx_t[n];
 
 
-		idx_t xadj_pos = 1;
-		idx_t xadj_accum = 0;
-		idx_t adjncy_pos = 0;
+		int xadj_pos = 1;
+		int xadj_accum = 0;
+		int adjncy_pos = 0;
 
 
 		xadj[0] = 0;
-		idx_t i = 0;
-		for (idx_t i=0;i<n;i++){
-			for(idx_t j=head[i];j;j=next[j])
+		int i = 0;
+		for (int i=0;i<n;i++){
+			for(int j=head[i];j;j=next[j])
 			{
-				idx_t enid = list[j];
+				int enid = list[j];
 				xadj_accum ++;
 				adjncy[adjncy_pos] = enid;
 				adjwgt[adjncy_pos] = cost[j];
@@ -599,10 +602,10 @@ struct Graph//无向图结构
 			}
 			xadj[xadj_pos++] = xadj_accum;
 		}
-		for ( idx_t i = 0; i < adjncy_pos; i++ ){
+		for ( int i = 0; i < adjncy_pos; i++ ){
 			adjwgt[i] = 1;
 		}
-		idx_t objval=0;
+		int objval=0;
 		METIS_PartGraphKway(
 			&nvtxs,
 			&ncon,
@@ -618,9 +621,9 @@ struct Graph//无向图结构
 			&objval,
 			part
 		);
-		for(idx_t i=0;i<n;i++)color[i]=part[i];
+		for(int i=0;i<n;i++)color[i]=part[i];
 		//划分
-		idx_t j,re=0;
+		int j,re=0;
 		for(i=0;i<n;i++)
 			for(j=head[i];j;j=next[j])
 				if(color[i]!=color[list[j]])
@@ -635,15 +638,15 @@ struct Graph//无向图结构
 		delete [] part;
 		return re;
 	}
-	struct state{state(idx_t a=0,idx_t b=0,idx_t c=0):id(a),len(b),index(c){}idx_t id,len,index;};//用于dijkstra的二元组
+	struct state{state(int a=0,int b=0,int c=0):id(a),len(b),index(c){}int id,len,index;};//用于dijkstra的二元组
 	struct cmp{bool operator()(const state &a,const state &b){return a.len>b.len;}};//重载priority_queue的比较函数
-	void dijkstra(idx_t S,vector<idx_t> &dist)//依据本图计算以S为起点的全局最短路将结果存入dist
+	void dijkstra(int S,vector<int> &dist)//依据本图计算以S为起点的全局最短路将结果存入dist
 	{
 		priority_queue<state,vector<state>,cmp>q;
 		state now;
-		idx_t i;
+		int i;
 		dist.clear();
-		while((idx_t)dist.size()<n)dist.push_back(INF);
+		while((int)dist.size()<n)dist.push_back(INF);
 		q.push(state(S,0));
 		while(q.size())
 		{
@@ -657,15 +660,15 @@ struct Graph//无向图结构
 			}
 		}
 	}
-	vector<idx_t> KNN(idx_t S,idx_t K,vector<idx_t>T)//暴力dijkstra计算S到T数组中的前K小并返回其在T数组中的下标
+	vector<int> KNN(int S,int K,vector<int>T)//暴力dijkstra计算S到T数组中的前K小并返回其在T数组中的下标
 	{
-		idx_t i;
-		vector<idx_t>dist(n,INF),Cnt(n,0);
+		int i;
+		vector<int>dist(n,INF),Cnt(n,0);
 		for(i=0;i<T.size();i++)Cnt[T[i]]++;
 		priority_queue<state,vector<state>,cmp>q;
 		state now;
 		q.push(state(S,0));
-		idx_t bound,cnt=0;
+		int bound,cnt=0;
 		while(q.size()&&cnt<K)
 		{
 			now=q.top();
@@ -679,22 +682,22 @@ struct Graph//无向图结构
 					if(dist[list[i]]==INF)q.push(state(list[i],dist[now.id]+cost[i]));
 			}
 		}
-		vector<idx_t>re;
-		for(idx_t i=0;i<T.size()&&re.size()<K;i++)
+		vector<int>re;
+		for(int i=0;i<T.size()&&re.size()<K;i++)
 			if(dist[T[i]]<=bound)
 				re.push_back(i);
 		return re;
 	}
-	vector<idx_t> find_path(idx_t S,idx_t T)//依据本图计算以S为起点的全局最短路将结果存入dist
+	vector<int> find_path(int S,int T)//依据本图计算以S为起点的全局最短路将结果存入dist
 	{
-		vector<idx_t>dist,re,last;
+		vector<int>dist,re,last;
 		priority_queue<state,vector<state>,cmp>q;
 		state now;
-		idx_t i;
+		int i;
 		dist.clear();
 		last.clear();
 		re.clear();
-		while((idx_t)dist.size()<n)
+		while((int)dist.size()<n)
 		{
 			dist.push_back(INF);
 			last.push_back(0);
@@ -723,34 +726,34 @@ struct Graph//无向图结构
 			return re;
 		}
 	}
-	idx_t real_node()
+	int real_node()
 	{
-		idx_t ans=0;
-		for(idx_t i=0;i<n;i++)
+		int ans=0;
+		for(int i=0;i<n;i++)
 		{
-			idx_t k=0;
-			for(idx_t j=head[i];j;j=next[j])k++;
+			int k=0;
+			for(int j=head[i];j;j=next[j])k++;
 			if(k!=2)ans++;
 		}
 		return ans;
 	}
 
 	//给定起点集合S，处理到每个结点的前K短路长度以及起点编号在list中的编号
-	vector<vector<idx_t> >K_Near_Dist,K_Near_Order;
-	void KNN_init(const vector<idx_t> &S , idx_t K)
+	vector<vector<int> >K_Near_Dist,K_Near_Order;
+	void KNN_init(const vector<int> &S , int K)
 	{
 		priority_queue<state,vector<state>,cmp>q;
 		state now;
-		idx_t i;
-		vector<idx_t>empty;
+		int i;
+		vector<int>empty;
 		K_Near_Dist.clear();
 		K_Near_Order.clear();
-		while((idx_t)K_Near_Dist.size()<n)
+		while((int)K_Near_Dist.size()<n)
 		{
 			K_Near_Dist.push_back(empty);
 			K_Near_Order.push_back(empty);
 		}
-		for(idx_t i=0;i<S.size();i++)
+		for(int i=0;i<S.size();i++)
 		q.push(state(S[i],0,i));
 		while(q.size())
 		{
@@ -765,20 +768,20 @@ struct Graph//无向图结构
 			}
 		}
 	}
-	vector<idx_t>* KNN_Dijkstra(idx_t S){return &K_Near_Order[S];}
+	vector<int>* KNN_Dijkstra(int S){return &K_Near_Order[S];}
 }G;
 struct Matrix//矩阵
 {
 	Matrix():n(0),a(NULL){}
 	~Matrix(){clear();}
-	idx_t n;//矩阵长宽
-	idx_t **a;
+	int n;//矩阵长宽
+	int **a;
 	void save()
 	{
 		printf("%d\n",n);
-		for(idx_t i=0;i<n;i++)
+		for(int i=0;i<n;i++)
 		{
-			for(idx_t j=0;j<n;j++)
+			for(int j=0;j<n;j++)
 				printf("%d ",a[i][j]);
 			printf("\n");
 		}
@@ -786,37 +789,37 @@ struct Matrix//矩阵
 	void load()
 	{
 		scanf("%d",&n);
-		a=new idx_t*[n];
-		for(idx_t i=0;i<n;i++)a[i]=new idx_t[n];
-		for(idx_t i=0;i<n;i++)
-			for(idx_t j=0;j<n;j++)
+		a=new int*[n];
+		for(int i=0;i<n;i++)a[i]=new int[n];
+		for(int i=0;i<n;i++)
+			for(int j=0;j<n;j++)
 				scanf("%d",&a[i][j]);
 	}
-	void cover(idx_t x)
+	void cover(int x)
 	{
-		for(idx_t i=0;i<n;i++)
-			for(idx_t j=0;j<n;j++)
+		for(int i=0;i<n;i++)
+			for(int j=0;j<n;j++)
 				a[i][j]=x;
 	}
-	void init(idx_t N)
+	void init(int N)
 	{
 		clear();
 		n=N;
-		a=new idx_t*[n];
-		for(idx_t i=0;i<n;i++)a[i]=new idx_t[n];
-		for(idx_t i=0;i<n;i++)
-			for(idx_t j=0;j<n;j++)
+		a=new int*[n];
+		for(int i=0;i<n;i++)a[i]=new int[n];
+		for(int i=0;i<n;i++)
+			for(int j=0;j<n;j++)
 				a[i][j]=INF;
-		for(idx_t i=0;i<n;i++)a[i][i]=0;
+		for(int i=0;i<n;i++)a[i][i]=0;
 	}
 	void clear()
 	{
-		for(idx_t i=0;i<n;i++)delete [] a[i];
+		for(int i=0;i<n;i++)delete [] a[i];
 		delete [] a;
 	}
 	void floyd()//对矩阵a进行floyd
 	{
-		idx_t i,j,k;
+		int i,j,k;
 		for(k=0;k<n;k++)
 			for(i=0;i<n;i++)
 				for(j=0;j<n;j++)
@@ -824,7 +827,7 @@ struct Matrix//矩阵
 	}
 	void floyd(Matrix &order)//对矩阵a进行floyd,将方案记录到order中
 	{
-		idx_t i,j,k;
+		int i,j,k;
 		for(k=0;k<n;k++)
 			for(i=0;i<n;i++)
 				for(j=0;j<n;j++)
@@ -837,16 +840,16 @@ struct Matrix//矩阵
 	void write()
 	{
 		printf("n=%d\n",n);
-		for(idx_t i=0;i<n;i++,cout<<endl)
-			for(idx_t j=0;j<n;j++)printf("%d ",a[i][j]);
+		for(int i=0;i<n;i++,cout<<endl)
+			for(int j=0;j<n;j++)printf("%d ",a[i][j]);
 	}
 	Matrix& operator =(const Matrix &m)
 	{
 		if(this!=(&m))
 		{
 			init(m.n);
-			for(idx_t i=0;i<n;i++)
-				for(idx_t j=0;j<n;j++)
+			for(int i=0;i<n;i++)
+				for(int j=0;j<n;j++)
 					a[i][j]=m.a[i][j];
 		}
 		return *this;
@@ -854,34 +857,34 @@ struct Matrix//矩阵
 };
 struct G_Tree
 {
-	idx_t root;
-	vector<idx_t>id_in_node;//真实结点所在的叶子结点编号
-	vector<vector<idx_t> >car_in_node;//用于挂border法KNN，记录每个节点上车的编号
-	vector<idx_t>car_offset;//用于记录车id距离车所在的node的距离
+	int root;
+	vector<int>id_in_node;//真实结点所在的叶子结点编号
+	vector<vector<int> >car_in_node;//用于挂border法KNN，记录每个节点上车的编号
+	vector<int>car_offset;//用于记录车id距离车所在的node的距离
 	struct Node
 	{
 		Node(){clear();}
-		idx_t part;//结点的儿子个数
-		idx_t n,father,*son,deep;//n:子图结点数,father父节点编号,son[2]左右儿子编号,deep结点所在树深度
+		int part;//结点的儿子个数
+		int n,father,*son,deep;//n:子图结点数,father父节点编号,son[2]左右儿子编号,deep结点所在树深度
 		Graph G;//子图
-		vector<idx_t>color;//结点分别在那个儿子中
+		vector<int>color;//结点分别在那个儿子中
 		Matrix dist,order;//border距离,以及border做floyd的中间点k方案,order=(-1:直接相连)|(-2:在父节点中相连)|(-3:在子结点中相连)|(-INF:无方案)
-		map<idx_t,pair<idx_t,idx_t> >borders;//first:真实border编号;second:<border序列的编号,对应子图中的编号(0~n-1)>
-		vector<idx_t>border_in_father,border_in_son,border_id,border_id_innode;//borders在父亲与儿子borders列表中的编号,border在原图中的编号,border在结点中的编号
-		vector<idx_t>path_record;//路径查询辅助数组，无意义
-		idx_t catch_id,catch_bound;//当前catch所保存的起点编号，当前catch所保存的已更新的catch的bound(<bound的begin已更新end)
-		vector<idx_t>catch_dist;//当前catch_dist保存的是从图G中结点catch_id到每个border的距离，其中只有值小于等于catch_bound的部分值是正确的
-		vector<idx_t>border_son_id;//当前border所在的儿子结点的编号
-		idx_t min_border_dist;//当前结点随catch缓存的边界点最小的距离(用于KNN剪枝)
-		vector<pair<idx_t,idx_t> >min_car_dist;//车辆集合中距离每个border最近的<car_dist,node_id>
+		map<int,pair<int,int> >borders;//first:真实border编号;second:<border序列的编号,对应子图中的编号(0~n-1)>
+		vector<int>border_in_father,border_in_son,border_id,border_id_innode;//borders在父亲与儿子borders列表中的编号,border在原图中的编号,border在结点中的编号
+		vector<int>path_record;//路径查询辅助数组，无意义
+		int catch_id,catch_bound;//当前catch所保存的起点编号，当前catch所保存的已更新的catch的bound(<bound的begin已更新end)
+		vector<int>catch_dist;//当前catch_dist保存的是从图G中结点catch_id到每个border的距离，其中只有值小于等于catch_bound的部分值是正确的
+		vector<int>border_son_id;//当前border所在的儿子结点的编号
+		int min_border_dist;//当前结点随catch缓存的边界点最小的距离(用于KNN剪枝)
+		vector<pair<int,int> >min_car_dist;//车辆集合中距离每个border最近的<car_dist,node_id>
 		void save()
 		{
 			printf("%d %d %d %d %d %d %d\n",n,father,part,deep,catch_id,catch_bound,min_border_dist);
-			for(idx_t i=0;i<part;i++)printf("%d ",son[i]);cout<<endl;
+			for(int i=0;i<part;i++)printf("%d ",son[i]);cout<<endl;
 			save_vector(color);
 			dist.save();
 			order.save();
-			save_map_idx_t_pair(borders);
+			save_map_int_pair(borders);
 			save_vector(border_in_father);
 			save_vector(border_in_son);
 			save_vector(border_id);
@@ -894,12 +897,12 @@ struct G_Tree
 		{
 			scanf("%d%d%d%d%d%d%d",&n,&father,&part,&deep,&catch_id,&catch_bound,&min_border_dist);
 			if(son!=NULL)delete[] son;
-			son=new idx_t[part];
-			for(idx_t i=0;i<part;i++)scanf("%d",&son[i]);
+			son=new int[part];
+			for(int i=0;i<part;i++)scanf("%d",&son[i]);
 			load_vector(color);
 			dist.load();
 			order.load();
-			load_map_idx_t_pair(borders);
+			load_map_int_pair(borders);
 			load_vector(border_in_father);
 			load_vector(border_in_son);
 			load_vector(border_id);
@@ -908,16 +911,16 @@ struct G_Tree
 			load_vector(catch_dist);
 			load_vector_pair(min_car_dist);
 		}
-		void init(idx_t n)
+		void init(int n)
 		{
 			part=n;
-			son=new idx_t[n];
-			for(idx_t i=0;i<n;i++)son[i]=0;
+			son=new int[n];
+			for(int i=0;i<n;i++)son[i]=0;
 		}
 		void clear()
 		{
 			part=n=father=deep=0;
-			//delete [] son;
+			delete [] son;
 			dist.clear();
 			order.clear();
 			G.clear();
@@ -932,15 +935,15 @@ struct G_Tree
 		}
 		void make_border_edge()//将border之间直接相连的边更新至dist(build_dist1)
 		{
-			idx_t i,j;
-			map<idx_t,pair<idx_t,idx_t> >::iterator iter;
+			int i,j;
+			map<int,pair<int,int> >::iterator iter;
 			for(iter=borders.begin();iter!=borders.end();iter++)
 			{
 				i=iter->second.second;
 				for(j=G.head[i];j;j=G.next[j])
 					if(color[i]!=color[G.list[j]])
 					{
-						idx_t id1,id2;
+						int id1,id2;
 						id1=iter->second.first;
 						id2=borders[G.id[G.list[j]]].first;
 						if(dist.a[id1][id2]>G.cost[j])
@@ -954,23 +957,23 @@ struct G_Tree
 		void write()
 		{
 			printf("n=%d deep=%d father=%d",n,deep,father);
-			printf(" son:(");for(idx_t i=0;i<part;i++){if(i>0)printf(" ");printf("%d",son[i]);}printf(")\n");
+			printf(" son:(");for(int i=0;i<part;i++){if(i>0)printf(" ");printf("%d",son[i]);}printf(")\n");
 			//G.draw();
-			printf("color:");for(idx_t i=0;i<(idx_t)color.size();i++)printf("%d ",color[i]);cout<<endl;
+			printf("color:");for(int i=0;i<(int)color.size();i++)printf("%d ",color[i]);cout<<endl;
 			printf("dist:\n");
 			dist.write();
 			printf("order:\n");
 			order.write();
 			printf("borders:");
-			for(map<idx_t,pair<idx_t,idx_t> >::iterator iter=borders.begin();iter!=borders.end();iter++)printf("(%d,%d,%d)",iter->first,iter->second.first,iter->second.second);cout<<endl;
-			printf("border_id");for(idx_t i=0;i<borders.size();i++)printf("(%d,%d)",i,border_id[i]);printf("\n");
-			printf("border_in_father");for(idx_t i=0;i<borders.size();i++)printf("(%d,%d)",i,border_in_father[i]);printf("\n");
-			printf("border_in_son");for(idx_t i=0;i<borders.size();i++)printf("(%d,%d)",i,border_in_son[i]);printf("\n");
-			printf("catch_dist ");for(idx_t i=0;i<catch_dist.size();i++)printf("(%d,%d)",i,catch_dist[i]);printf("\n");
-			printf("min_car_dist ");for(idx_t i=0;i<min_car_dist.size();i++)printf("(i:%d,D:%d,id:%d)",i,min_car_dist[i].first,min_car_dist[i].second);printf("\n");
+			for(map<int,pair<int,int> >::iterator iter=borders.begin();iter!=borders.end();iter++)printf("(%d,%d,%d)",iter->first,iter->second.first,iter->second.second);cout<<endl;
+			printf("border_id");for(int i=0;i<borders.size();i++)printf("(%d,%d)",i,border_id[i]);printf("\n");
+			printf("border_in_father");for(int i=0;i<borders.size();i++)printf("(%d,%d)",i,border_in_father[i]);printf("\n");
+			printf("border_in_son");for(int i=0;i<borders.size();i++)printf("(%d,%d)",i,border_in_son[i]);printf("\n");
+			printf("catch_dist ");for(int i=0;i<catch_dist.size();i++)printf("(%d,%d)",i,catch_dist[i]);printf("\n");
+			printf("min_car_dist ");for(int i=0;i<min_car_dist.size();i++)printf("(i:%d,D:%d,id:%d)",i,min_car_dist[i].first,min_car_dist[i].second);printf("\n");
 		}
 	};
-	idx_t node_tot,node_size;
+	int node_tot,node_size;
 	Node *node;
 	void save()
 	{
@@ -979,7 +982,7 @@ struct G_Tree
 		save_vector(id_in_node);
 		save_vector_vector(car_in_node);
 		save_vector(car_offset);
-		for(idx_t i=0;i<node_size;i++)
+		for(int i=0;i<node_size;i++)
 		{
 			printf("\n");
 			node[i].save();
@@ -994,7 +997,7 @@ struct G_Tree
 		load_vector_vector(car_in_node);
 		load_vector(car_offset);
 		node=new Node[G.n*2+2];
-		for(idx_t i=0;i<node_size;i++)
+		for(int i=0;i<node_size;i++)
 		{
 			node[i].load();
 		}
@@ -1002,29 +1005,29 @@ struct G_Tree
 	void write()
 	{
 		printf("root=%d node_tot=%d\n",root,node_tot);
-		for(idx_t i=1;i<node_tot;i++)
+		for(int i=1;i<node_tot;i++)
 		{
 			printf("node:%d\n",i);
 			node[i].write();
 			cout<<endl;
 		}
 	}
-	void add_border(idx_t x,idx_t id,idx_t id2)//向x点的border集合中加入一个新真实id,在子图的虚拟id为id2,并对其标号为border中的编号
+	void add_border(int x,int id,int id2)//向x点的border集合中加入一个新真实id,在子图的虚拟id为id2,并对其标号为border中的编号
 	{
-		map<idx_t,pair<idx_t,idx_t> >::iterator iter;
+		map<int,pair<int,int> >::iterator iter;
 		iter=node[x].borders.find(id);
 		if(iter==node[x].borders.end())
 		{
-			pair<idx_t,idx_t> second=make_pair((idx_t)node[x].borders.size(),id2);
+			pair<int,int> second=make_pair((int)node[x].borders.size(),id2);
 			node[x].borders[id]=second;
 		}
 	}
-	void make_border(idx_t x,const vector<idx_t> &color)//计算点x的border集合，二部图之间的边集为E
+	void make_border(int x,const vector<int> &color)//计算点x的border集合，二部图之间的边集为E
 	{
-		for(idx_t i=0;i<node[x].G.n;i++)
+		for(int i=0;i<node[x].G.n;i++)
 		{
-			idx_t id=node[x].G.id[i];
-			for(idx_t j=node[x].G.head[i];j;j=node[x].G.next[j])
+			int id=node[x].G.id[i];
+			for(int j=node[x].G.head[i];j;j=node[x].G.next[j])
 				if(color[i]!=color[node[x].G.list[j]])
 				{
 					add_border(x,id,i);
@@ -1032,20 +1035,20 @@ struct G_Tree
 				}
 		}
 	}
-	idx_t partition_root(idx_t x=1)//返回该结点在不超过Additional_Memory限制下最多可以划分为多少块
+	int partition_root(int x=1)//返回该结点在不超过Additional_Memory限制下最多可以划分为多少块
 	{
 		if((long long)node[x].G.n*node[x].G.n<=Additional_Memory)return node[x].G.n;
-		idx_t l=2,r=max(2,(idx_t)sqrt(Additional_Memory)),mid;//二分块数
+		int l=2,r=max(2,(int)sqrt(Additional_Memory)),mid;//二分块数
 		while(l<r)
 		{
 			mid=(l+r+1)>>1;
-			idx_t num=node[x].G.Split_Borders(mid);
+			int num=node[x].G.Split_Borders(mid);
 			if(num*num>Additional_Memory)r=mid-1;
 			else l=mid;
 		}
 		return l;
 	}
-	void build(idx_t x=1,idx_t f=1,const Graph &g=G)//递归建树，当前结点x,叶子规模f,当前结点的子图g
+	void build(int x=1,int f=1,const Graph &g=G)//递归建树，当前结点x,叶子规模f,当前结点的子图g
 	{
 		if(x==1)//x为根
 		{
@@ -1074,8 +1077,8 @@ struct G_Tree
 		if(node[x].n>f)
 		{
 			//子结点标号
-			idx_t top=node_tot;
-			for(idx_t i=0;i<node[x].part;i++)
+			int top=node_tot;
+			for(int i=0;i<node[x].part;i++)
 			{
 				node[x].son[i]=top+i;
 				node[top+i].father=x;
@@ -1084,21 +1087,21 @@ struct G_Tree
 			//添加介于两块之间的border
 			Graph **graph;
 			graph=new Graph*[node[x].part];
-			for(idx_t i=0;i<node[x].part;i++)graph[i]=&node[node[x].son[i]].G;
+			for(int i=0;i<node[x].part;i++)graph[i]=&node[node[x].son[i]].G;
 			node[x].color=node[x].G.Split(graph,node[x].part);
 			delete [] graph;
 			make_border(x,node[x].color);
 			if(node[x].n>50)printf("border=%d\n",node[x].borders.size());
 			//传递border至子结点
-			map<idx_t,pair<idx_t,idx_t> >::iterator iter;
+			map<int,pair<int,int> >::iterator iter;
 			for(iter=node[x].borders.begin();iter!=node[x].borders.end();iter++)
 			{
 				//printf("(%d,%d,%d)",iter->first,iter->second.first,iter->second.second);
 				node[x].color[iter->second.second]=-node[x].color[iter->second.second]-1;
 			}
 			//cout<<endl;
-			vector<idx_t>tot(node[x].part,0);
-			for(idx_t i=0;i<node[x].n;i++)
+			vector<int>tot(node[x].part,0);
+			for(int i=0;i<node[x].n;i++)
 			{
 				if(node[x].color[i]<0)
 				{
@@ -1108,7 +1111,7 @@ struct G_Tree
 				tot[node[x].color[i]]++;
 			}
 			//递归子结点
-			for(idx_t i=0;i<node[x].part;i++)
+			for(int i=0;i<node[x].part;i++)
 				build(node[x].son[i]);
 		}
 		else if(node[x].n>50)cout<<endl;
@@ -1117,7 +1120,7 @@ struct G_Tree
 		node[x].order.cover(-INF);
 		if(x==1)//x为根建立dist
 		{
-			for(idx_t i=1;i<min(1000,node_tot-1);i++)
+			for(int i=1;i<min(1000,node_tot-1);i++)
 				if(node[i].n>50)
 				{
 					printf("x=%d deep=%d n=%d ",i,node[i].deep,node[i].G.n);
@@ -1131,15 +1134,15 @@ struct G_Tree
 			build_dist2(root);
 			//计算查询每个结点所在的叶子编号
 			id_in_node.clear();
-			for(idx_t i=0;i<node[root].G.n;i++)id_in_node.push_back(-1);
-			for(idx_t i=1;i<node_tot;i++)
+			for(int i=0;i<node[root].G.n;i++)id_in_node.push_back(-1);
+			for(int i=1;i<node_tot;i++)
 				if(node[i].G.n==1)
 					id_in_node[node[i].G.id[0]]=i;
 			//建立catch
-			for(idx_t i=1;i<=node_tot;i++)
+			for(int i=1;i<=node_tot;i++)
 			{
 				node[i].catch_id=-1;
-				for(idx_t j=0;j<node[i].borders.size();j++)
+				for(int j=0;j<node[i].borders.size();j++)
 				{
 					node[i].catch_dist.push_back(0);
 					node[i].min_car_dist.push_back(make_pair(INF,-1));
@@ -1147,18 +1150,18 @@ struct G_Tree
 			}
 			{
 				//建立car_in_node;
-				vector<idx_t>empty_vector;
+				vector<int>empty_vector;
 				empty_vector.clear();
 				car_in_node.clear();
-				for(idx_t i=0;i<G.n;i++)car_in_node.push_back(empty_vector);
+				for(int i=0;i<G.n;i++)car_in_node.push_back(empty_vector);
 			}
 		}
 
 	}
-	void build_dist1(idx_t x=1)//自下而上归并子图内部dist
+	void build_dist1(int x=1)//自下而上归并子图内部dist
 	{
 		//计算子结点内部dist并传递给x
-		for(idx_t i=0;i<node[x].part;i++)if(node[x].son[i])build_dist1(node[x].son[i]);
+		for(int i=0;i<node[x].part;i++)if(node[x].son[i])build_dist1(node[x].son[i]);
 		if(node[x].son[0])//非叶子
 		{
 			//建立x子结点之间的边
@@ -1170,9 +1173,9 @@ struct G_Tree
 		//向父节点传递内部边权
 		if(node[x].father)
 		{
-			idx_t y=node[x].father,i,j;
-			map<idx_t,pair<idx_t,idx_t> >::iterator x_iter1,y_iter1;
-			vector<idx_t>id_in_fa(node[x].borders.size());
+			int y=node[x].father,i,j;
+			map<int,pair<int,int> >::iterator x_iter1,y_iter1;
+			vector<int>id_in_fa(node[x].borders.size());
 			//计算子图border在父节点border序列中的编号,不存在为-1
 			for(x_iter1=node[x].borders.begin();x_iter1!=node[x].borders.end();x_iter1++)
 			{
@@ -1181,11 +1184,11 @@ struct G_Tree
 				else id_in_fa[x_iter1->second.first]=y_iter1->second.first;
 			}
 			//将子图内部的全连接边权传递给父亲
-			for(i=0;i<(idx_t)node[x].borders.size();i++)
-				for(j=0;j<(idx_t)node[x].borders.size();j++)
+			for(i=0;i<(int)node[x].borders.size();i++)
+				for(j=0;j<(int)node[x].borders.size();j++)
 					if(id_in_fa[i]!=-1&&id_in_fa[j]!=-1)
 					{
-						idx_t *p=&node[y].dist.a[id_in_fa[i]][id_in_fa[j]];
+						int *p=&node[y].dist.a[id_in_fa[i]][id_in_fa[j]];
 						if((*p)>node[x].dist.a[i][j])
 						{
 							(*p)=node[x].dist.a[i][j];
@@ -1195,29 +1198,29 @@ struct G_Tree
 		}
 		return;
 	}
-	void build_dist2(idx_t x=1)//自上而下修正子图外部dist
+	void build_dist2(int x=1)//自上而下修正子图外部dist
 	{
 		if(x!=root)node[x].dist.floyd(node[x].order);
 		if(node[x].son[0])
 		{
 			//计算此节点border编号在子图中border序列的编号
-			vector<idx_t>id_(node[x].borders.size());
-			vector<idx_t>color_(node[x].borders.size());
-			map<idx_t,pair<idx_t,idx_t> >::iterator iter1,iter2;
+			vector<int>id_(node[x].borders.size());
+			vector<int>color_(node[x].borders.size());
+			map<int,pair<int,int> >::iterator iter1,iter2;
 			for(iter1=node[x].borders.begin();iter1!=node[x].borders.end();iter1++)
 			{
-				idx_t c=node[x].color[iter1->second.second];
+				int c=node[x].color[iter1->second.second];
 				color_[iter1->second.first]=c;
-				idx_t y=node[x].son[c];
+				int y=node[x].son[c];
 				id_[iter1->second.first]=node[y].borders[iter1->first].first;
 			}
 			//修正子图边权
-			for(idx_t i=0;i<(idx_t)node[x].borders.size();i++)
-				for(idx_t j=0;j<(idx_t)node[x].borders.size();j++)
+			for(int i=0;i<(int)node[x].borders.size();i++)
+				for(int j=0;j<(int)node[x].borders.size();j++)
 					if(color_[i]==color_[j])
 					{
-						idx_t y=node[x].son[color_[i]];
-						idx_t *p=&node[y].dist.a[id_[i]][id_[j]];
+						int y=node[x].son[color_[i]];
+						int *p=&node[y].dist.a[id_[i]][id_[j]];
 						if((*p)>node[x].dist.a[i][j])
 						{
 							(*p)=node[x].dist.a[i][j];
@@ -1225,18 +1228,18 @@ struct G_Tree
 						}
 					}
 			//递归子节点
-			for(idx_t i=0;i<node[x].part;i++)
+			for(int i=0;i<node[x].part;i++)
 				if(node[x].son[i])build_dist2(node[x].son[i]);
 		}
 	}
 	void build_border_in_father_son()//计算每个结点border在父亲/儿子borders数组中的编号
 	{
-		idx_t i,j,x,y;
+		int i,j,x,y;
 		for(x=1;x<node_tot;x++)
 		{
 			for(i=0;i<node[x].borders.size();i++)node[x].border_id.push_back(0);
 			for(i=0;i<node[x].borders.size();i++)node[x].border_id_innode.push_back(0);
-			for(map<idx_t,pair<idx_t,idx_t> >::iterator iter=node[x].borders.begin();iter!=node[x].borders.end();iter++)
+			for(map<int,pair<int,int> >::iterator iter=node[x].borders.begin();iter!=node[x].borders.end();iter++)
 			{
 				node[x].border_id[iter->second.first]=iter->first;
 				node[x].border_id_innode[iter->second.first]=iter->second.second;
@@ -1251,10 +1254,10 @@ struct G_Tree
 			if(node[x].father)
 			{
 				y=node[x].father;
-				map<idx_t,pair<idx_t,idx_t> >::iterator iter;
+				map<int,pair<int,int> >::iterator iter;
 				for(iter=node[x].borders.begin();iter!=node[x].borders.end();iter++)
 				{
-					map<idx_t,pair<idx_t,idx_t> >::iterator iter2;
+					map<int,pair<int,int> >::iterator iter2;
 					iter2=node[y].borders.find(iter->first);
 					if(iter2!=node[y].borders.end())
 						node[x].border_in_father[iter->second.first]=iter2->second.first;
@@ -1262,21 +1265,21 @@ struct G_Tree
 			}
 			if(node[x].son[0])
 			{
-				map<idx_t,pair<idx_t,idx_t> >::iterator iter;
+				map<int,pair<int,int> >::iterator iter;
 				for(iter=node[x].borders.begin();iter!=node[x].borders.end();iter++)
 				{
 					y=node[x].son[node[x].color[iter->second.second]];
-					map<idx_t,pair<idx_t,idx_t> >::iterator iter2;
+					map<int,pair<int,int> >::iterator iter2;
 					iter2=node[y].borders.find(iter->first);
 					if(iter2!=node[y].borders.end())
 						node[x].border_in_son[iter->second.first]=iter2->second.first;
 				}
-				for (idx_t i = 0; i<node[x].borders.size(); i++)
+				for (int i = 0; i<node[x].borders.size(); i++)
 					node[x].border_son_id.push_back(node[x].son[node[x].color[node[x].border_id_innode[i]]]);
 			}
 		}
 	}
-	/*void push_borders_up(idx_t x,const vector<idx_t> &dist1,vector<idx_t> &dist2)//将S到结点x边界点的最短路长度记录在dist中，计算S到x.father真实border的距离更新dist
+	/*void push_borders_up(int x,const vector<int> &dist1,vector<int> &dist2)//将S到结点x边界点的最短路长度记录在dist中，计算S到x.father真实border的距离更新dist
 	{
 		if(node[x].father==0)
 		{
@@ -1285,27 +1288,27 @@ struct G_Tree
 		}
 		times[5]-=clock();
 		dist2.clear();
-		idx_t y=node[x].father;
+		int y=node[x].father;
 		while(dist2.size()<node[y].borders.size())dist2.push_back(INF);
-		for(idx_t i=0;i<node[x].borders.size();i++)
+		for(int i=0;i<node[x].borders.size();i++)
 			if(node[x].border_in_father[i]!=-1)
 				dist2[node[x].border_in_father[i]]=dist1[i];
 		//printf("dist2:");save_vector(dist2);
-		idx_t **dist=node[y].dist.a;
-		vector<idx_t>begin,end;//已算出的序列编号,未算出的序列编号
+		int **dist=node[y].dist.a;
+		vector<int>begin,end;//已算出的序列编号,未算出的序列编号
 		times[5]+=clock();
 		times[6]-=clock();
-		for(idx_t i=0;i<dist2.size();i++)
+		for(int i=0;i<dist2.size();i++)
 		{
 			if(dist2[i]<INF)begin.push_back(i);
 			else if(node[y].border_in_father[i]!=-1)end.push_back(i);
 		}
 		times[6]+=clock();
 		times[7]-=clock();
-		for(idx_t i=0;i<(idx_t)begin.size();i++)
+		for(int i=0;i<(int)begin.size();i++)
 		{
-			idx_t i_=begin[i];
-			for(idx_t j=0;j<(idx_t)end.size();j++)
+			int i_=begin[i];
+			for(int j=0;j<(int)end.size();j++)
 			{
 				if(dist2[end[j]]>dist2[i_]+dist[i_][end[j]])
 				dist2[end[j]]=dist2[i_]+dist[i_][end[j]];
@@ -1313,25 +1316,25 @@ struct G_Tree
 		}
 		times[7]+=clock();
 	}*/
-	void push_borders_up(idx_t x, vector<idx_t> &dist1, idx_t type)//将S到结点x边界点的最短路长度记录在dist1中，计算S到x.father真实border的距离更新dist1 type==0上推,type==1下推
+	void push_borders_up(int x, vector<int> &dist1, int type)//将S到结点x边界点的最短路长度记录在dist1中，计算S到x.father真实border的距离更新dist1 type==0上推,type==1下推
 	{
 		if (node[x].father == 0)return;
 		times[5] -= clock();
-		idx_t y = node[x].father;
-		vector<idx_t>dist2(node[y].borders.size(), INF);
-		for (idx_t i = 0; i<node[x].borders.size(); i++)
+		int y = node[x].father;
+		vector<int>dist2(node[y].borders.size(), INF);
+		for (int i = 0; i<node[x].borders.size(); i++)
 			if (node[x].border_in_father[i] != -1)
 				dist2[node[x].border_in_father[i]] = dist1[i];
 		//printf("dist2:");save_vector(dist2);
-		idx_t **dist = node[y].dist.a;
-		//vector<idx_t>begin,end;//已算出的序列编号,未算出的序列编号
-		idx_t *begin, *end;
-		begin = new idx_t[node[x].borders.size()];
-		end = new idx_t[node[y].borders.size()];
-		idx_t tot0 = 0, tot1 = 0;
+		int **dist = node[y].dist.a;
+		//vector<int>begin,end;//已算出的序列编号,未算出的序列编号
+		int *begin, *end;
+		begin = new int[node[x].borders.size()];
+		end = new int[node[y].borders.size()];
+		int tot0 = 0, tot1 = 0;
 		times[5] += clock();
 		times[6] -= clock();
-		for (idx_t i = 0; i<dist2.size(); i++)
+		for (int i = 0; i<dist2.size(); i++)
 		{
 			if (dist2[i]<INF)begin[tot0++] = i;
 			else if (node[y].border_in_father[i] != -1)end[tot1++] = i;
@@ -1340,32 +1343,32 @@ struct G_Tree
 		times[7] -= clock();
 		if (type == 0)
 		{
-			for (idx_t i = 0; i<tot0; i++)
+			for (int i = 0; i<tot0; i++)
 			{
-				idx_t i_ = begin[i];
-				for (idx_t j = 0; j<tot1; j++)
+				int i_ = begin[i];
+				for (int j = 0; j<tot1; j++)
 				{
-					idx_t j_ = end[j];
+					int j_ = end[j];
 					if (dist2[j_]>dist2[i_] + dist[i_][j_])
 						dist2[j_] = dist2[i_] + dist[i_][j_];
 				}
 			}
 		}
 		else{
-			for (idx_t i = 0; i<tot0; i++)
+			for (int i = 0; i<tot0; i++)
 			{
-				idx_t i_ = begin[i];
-				for (idx_t j = 0; j<tot1; j++)
+				int i_ = begin[i];
+				for (int j = 0; j<tot1; j++)
 				{
-					idx_t j_ = end[j];
+					int j_ = end[j];
 					if (dist2[j_]>dist2[i_] + dist[j_][i_])
 						dist2[j_] = dist2[i_] + dist[j_][i_];
 				}
 			}
 		}
 		/*
-		idx_t bit[2]={0,0xffffffff};
-		idx_t i,i_,j,j_,ls1,ls2;
+		int bit[2]={0,0xffffffff};
+		int i,i_,j,j_,ls1,ls2;
 		for(i=0;i<tot0;++i)
 		{
 		i_=begin[i];
@@ -1383,28 +1386,28 @@ struct G_Tree
 		delete[] begin;
 		delete[] end;
 	}
-	void push_borders_up_catch(idx_t x, idx_t bound = INF)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x.father真实border的距离更新x.father.catch
+	void push_borders_up_catch(int x, int bound = INF)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x.father真实border的距离更新x.father.catch
 	{
 		if (node[x].father == 0)return;
-		idx_t y = node[x].father;
+		int y = node[x].father;
 		if (node[x].catch_id == node[y].catch_id&&bound <= node[y].catch_bound)return;
 		node[y].catch_id = node[x].catch_id;
 		node[y].catch_bound = bound;
-		vector<idx_t> *dist1 = &node[x].catch_dist, *dist2 = &node[y].catch_dist;
-		for (idx_t i = 0; i<(*dist2).size(); i++)(*dist2)[i] = INF;
-		for (idx_t i = 0; i<node[x].borders.size(); i++)
+		vector<int> *dist1 = &node[x].catch_dist, *dist2 = &node[y].catch_dist;
+		for (int i = 0; i<(*dist2).size(); i++)(*dist2)[i] = INF;
+		for (int i = 0; i<node[x].borders.size(); i++)
 			if (node[x].border_in_father[i] != -1)
 			{
 				if (node[x].catch_dist[i]<bound)//bound界内的begin
 					(*dist2)[node[x].border_in_father[i]] = (*dist1)[i];
 				else (*dist2)[node[x].border_in_father[i]] = -1;//bound界外的begin
 			}
-		idx_t **dist = node[y].dist.a;
-		idx_t *begin, *end;//已算出的序列编号,未算出的序列编号
-		begin = new idx_t[node[x].borders.size()];
-		end = new idx_t[node[y].borders.size()];
-		idx_t tot0 = 0, tot1 = 0;
-		for (idx_t i = 0; i<(*dist2).size(); i++)
+		int **dist = node[y].dist.a;
+		int *begin, *end;//已算出的序列编号,未算出的序列编号
+		begin = new int[node[x].borders.size()];
+		end = new int[node[y].borders.size()];
+		int tot0 = 0, tot1 = 0;
+		for (int i = 0; i<(*dist2).size(); i++)
 		{
 			if ((*dist2)[i] == -1)(*dist2)[i] = INF;
 			else if ((*dist2)[i]<INF)begin[tot0++] = i;
@@ -1414,10 +1417,10 @@ struct G_Tree
 					end[tot1++] = i;
 			}
 		}
-		for (idx_t i = 0; i<tot0; i++)
+		for (int i = 0; i<tot0; i++)
 		{
-			idx_t i_ = begin[i];
-			for (idx_t j = 0; j<tot1; j++)
+			int i_ = begin[i];
+			for (int j = 0; j<tot1; j++)
 			{
 				if ((*dist2)[end[j]]>(*dist2)[i_] + dist[i_][end[j]])
 					(*dist2)[end[j]] = (*dist2)[i_] + dist[i_][end[j]];
@@ -1426,30 +1429,30 @@ struct G_Tree
 		delete[] begin;
 		delete[] end;
 		node[y].min_border_dist = INF;
-		for (idx_t i = 0; i<node[y].catch_dist.size(); i++)
+		for (int i = 0; i<node[y].catch_dist.size(); i++)
 			if (node[y].border_in_father[i] != -1)
 				node[y].min_border_dist = min(node[y].min_border_dist, node[y].catch_dist[i]);
 	}
-	void push_borders_down_catch(idx_t x, idx_t y, idx_t bound = INF)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x的儿子y真实border的距离更新y.catch
+	void push_borders_down_catch(int x, int y, int bound = INF)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x的儿子y真实border的距离更新y.catch
 	{
 		if (node[x].catch_id == node[y].catch_id&&bound <= node[y].catch_bound)return;
 		node[y].catch_id = node[x].catch_id;
 		node[y].catch_bound = bound;
-		vector<idx_t> *dist1 = &node[x].catch_dist, *dist2 = &node[y].catch_dist;
-		for (idx_t i = 0; i<(*dist2).size(); i++)(*dist2)[i] = INF;
-		for (idx_t i = 0; i<node[x].borders.size(); i++)
+		vector<int> *dist1 = &node[x].catch_dist, *dist2 = &node[y].catch_dist;
+		for (int i = 0; i<(*dist2).size(); i++)(*dist2)[i] = INF;
+		for (int i = 0; i<node[x].borders.size(); i++)
 			if (node[x].son[node[x].color[node[x].border_id_innode[i]]] == y)
 			{
 				if (node[x].catch_dist[i]<bound)//bound界内的begin
 					(*dist2)[node[x].border_in_son[i]] = (*dist1)[i];
 				else (*dist2)[node[x].border_in_son[i]] = -1;//bound界外的begin
 			}
-		idx_t **dist = node[y].dist.a;
-		idx_t *begin, *end;//已算出的序列编号,未算出的序列编号
-		begin = new idx_t[node[y].borders.size()];
-		end = new idx_t[node[y].borders.size()];
-		idx_t tot0 = 0, tot1 = 0;
-		for (idx_t i = 0; i<(*dist2).size(); i++)
+		int **dist = node[y].dist.a;
+		int *begin, *end;//已算出的序列编号,未算出的序列编号
+		begin = new int[node[y].borders.size()];
+		end = new int[node[y].borders.size()];
+		int tot0 = 0, tot1 = 0;
+		for (int i = 0; i<(*dist2).size(); i++)
 		{
 			if ((*dist2)[i] == -1)(*dist2)[i] = INF;
 			else if ((*dist2)[i]<INF)begin[tot0++] = i;
@@ -1459,10 +1462,10 @@ struct G_Tree
 					end[tot1++] = i;
 			}
 		}
-		for (idx_t i = 0; i<tot0; i++)
+		for (int i = 0; i<tot0; i++)
 		{
-			idx_t i_ = begin[i];
-			for (idx_t j = 0; j<tot1; j++)
+			int i_ = begin[i];
+			for (int j = 0; j<tot1; j++)
 			{
 				if ((*dist2)[end[j]]>(*dist2)[i_] + dist[i_][end[j]])
 					(*dist2)[end[j]] = (*dist2)[i_] + dist[i_][end[j]];
@@ -1471,23 +1474,23 @@ struct G_Tree
 		delete[] begin;
 		delete[] end;
 		node[y].min_border_dist = INF;
-		for (idx_t i = 0; i<node[y].catch_dist.size(); i++)
+		for (int i = 0; i<node[y].catch_dist.size(); i++)
 			if (node[y].border_in_father[i] != -1)
 				node[y].min_border_dist = min(node[y].min_border_dist, node[y].catch_dist[i]);
 	}
-	void push_borders_brother_catch(idx_t x, idx_t y, idx_t bound = INF)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x的兄弟结点y真实border的距离更新y.catch
+	void push_borders_brother_catch(int x, int y, int bound = INF)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x的兄弟结点y真实border的距离更新y.catch
 	{
-		idx_t S = node[x].catch_id, LCA = node[x].father, i, j;
+		int S = node[x].catch_id, LCA = node[x].father, i, j;
 		if (node[y].catch_id == S&&node[y].catch_bound >= bound)return;
-		idx_t p;
+		int p;
 		node[y].catch_id = S;
 		node[y].catch_bound = bound;
-		vector<idx_t>id_LCA[2], id_now[2];//子结点候选border在LCA中的border序列编号,子结点候选border在内部的border序列的编号
-		for (idx_t t = 0; t<2; t++)
+		vector<int>id_LCA[2], id_now[2];//子结点候选border在LCA中的border序列编号,子结点候选border在内部的border序列的编号
+		for (int t = 0; t<2; t++)
 		{
 			if (t == 0)p = x;
 			else p = y;
-			for (i = j = 0; i<(idx_t)node[p].borders.size(); i++)
+			for (i = j = 0; i<(int)node[p].borders.size(); i++)
 				if (node[p].border_in_father[i] != -1)
 					if ((t == 1 && (Optimization_Euclidean_Cut == false || Euclidean_Dist(node[x].catch_id, node[p].border_id[i])<bound)) || (t == 0 && node[p].catch_dist[i]<bound))
 					{
@@ -1495,20 +1498,20 @@ struct G_Tree
 						id_now[t].push_back(i);
 					}
 		}
-		for (idx_t i = 0; i<node[y].catch_dist.size(); i++)node[y].catch_dist[i] = INF;
-		for (idx_t i = 0; i<id_LCA[0].size(); i++)
-			for (idx_t j = 0; j<id_LCA[1].size(); j++)
+		for (int i = 0; i<node[y].catch_dist.size(); i++)node[y].catch_dist[i] = INF;
+		for (int i = 0; i<id_LCA[0].size(); i++)
+			for (int j = 0; j<id_LCA[1].size(); j++)
 			{
-				idx_t k = node[x].catch_dist[id_now[0][i]] + node[LCA].dist.a[id_LCA[0][i]][id_LCA[1][j]];
+				int k = node[x].catch_dist[id_now[0][i]] + node[LCA].dist.a[id_LCA[0][i]][id_LCA[1][j]];
 				if (k<node[y].catch_dist[id_now[1][j]])node[y].catch_dist[id_now[1][j]] = k;
 			}
-		idx_t **dist = node[y].dist.a;
-		//vector<idx_t>begin,end;//已算出的序列编号,未算出的序列编号
-		idx_t *begin, *end;
-		begin = new idx_t[node[y].borders.size()];
-		end = new idx_t[node[y].borders.size()];
-		idx_t tot0 = 0, tot1 = 0;
-		for (idx_t i = 0; i<node[y].catch_dist.size(); i++)
+		int **dist = node[y].dist.a;
+		//vector<int>begin,end;//已算出的序列编号,未算出的序列编号
+		int *begin, *end;
+		begin = new int[node[y].borders.size()];
+		end = new int[node[y].borders.size()];
+		int tot0 = 0, tot1 = 0;
+		for (int i = 0; i<node[y].catch_dist.size(); i++)
 		{
 			if (node[y].catch_dist[i]<bound)begin[tot0++] = i;
 			else if (node[y].catch_dist[i] == INF)
@@ -1517,10 +1520,10 @@ struct G_Tree
 					end[tot1++] = i;
 			}
 		}
-		for (idx_t i = 0; i<tot0; i++)
+		for (int i = 0; i<tot0; i++)
 		{
-			idx_t i_ = begin[i];
-			for (idx_t j = 0; j<tot1; j++)
+			int i_ = begin[i];
+			for (int j = 0; j<tot1; j++)
 			{
 				if (node[y].catch_dist[end[j]]>node[y].catch_dist[i_] + dist[i_][end[j]])
 					node[y].catch_dist[end[j]] = node[y].catch_dist[i_] + dist[i_][end[j]];
@@ -1529,45 +1532,45 @@ struct G_Tree
 		delete[] begin;
 		delete[] end;
 		node[y].min_border_dist = INF;
-		for (idx_t i = 0; i<node[y].catch_dist.size(); i++)
+		for (int i = 0; i<node[y].catch_dist.size(); i++)
 			if (node[y].border_in_father[i] != -1)
 				node[y].min_border_dist = min(node[y].min_border_dist, node[y].catch_dist[i]);
 	}
-	void push_borders_up_path(idx_t x, vector<idx_t> &dist1)//将S到结点x边界点的最短路长度记录在dist1中，计算S到x.father真实border的距离更新dist1,并将到x.father的方案记录到x.father.path_record中(>=0表示结点，<0表示传递于那个结点儿子,-INF表示无前驱)
+	void push_borders_up_path(int x, vector<int> &dist1)//将S到结点x边界点的最短路长度记录在dist1中，计算S到x.father真实border的距离更新dist1,并将到x.father的方案记录到x.father.path_record中(>=0表示结点，<0表示传递于那个结点儿子,-INF表示无前驱)
 	{
 		if (node[x].father == 0)return;
 		times[5] -= clock();
-		idx_t y = node[x].father;
-		vector<idx_t>dist3(node[y].borders.size(), INF);
-		vector<idx_t> *order = &node[y].path_record;
+		int y = node[x].father;
+		vector<int>dist3(node[y].borders.size(), INF);
+		vector<int> *order = &node[y].path_record;
 		(*order).clear();
-		for (idx_t i = 0; i<node[y].borders.size(); i++)(*order).push_back(-INF);
-		for (idx_t i = 0; i<node[x].borders.size(); i++)
+		for (int i = 0; i<node[y].borders.size(); i++)(*order).push_back(-INF);
+		for (int i = 0; i<node[x].borders.size(); i++)
 			if (node[x].border_in_father[i] != -1)
 			{
 				dist3[node[x].border_in_father[i]] = dist1[i];
 				(*order)[node[x].border_in_father[i]] = -x;
 			}
 		//printf("dist3:");save_vector(dist3);
-		idx_t **dist = node[y].dist.a;
-		//vector<idx_t>begin,end;//已算出的序列编号,未算出的序列编号
-		idx_t *begin, *end;
-		begin = new idx_t[node[x].borders.size()];
-		end = new idx_t[node[y].borders.size()];
-		idx_t tot0 = 0, tot1 = 0;
+		int **dist = node[y].dist.a;
+		//vector<int>begin,end;//已算出的序列编号,未算出的序列编号
+		int *begin, *end;
+		begin = new int[node[x].borders.size()];
+		end = new int[node[y].borders.size()];
+		int tot0 = 0, tot1 = 0;
 		times[5] += clock();
 		times[6] -= clock();
-		for (idx_t i = 0; i<dist3.size(); i++)
+		for (int i = 0; i<dist3.size(); i++)
 		{
 			if (dist3[i]<INF)begin[tot0++] = i;
 			else if (node[y].border_in_father[i] != -1)end[tot1++] = i;
 		}
 		times[6] += clock();
 		times[7] -= clock();
-		for (idx_t i = 0; i<tot0; i++)
+		for (int i = 0; i<tot0; i++)
 		{
-			idx_t i_ = begin[i];
-			for (idx_t j = 0; j<tot1; j++)
+			int i_ = begin[i];
+			for (int j = 0; j<tot1; j++)
 			{
 				if (dist3[end[j]]>dist3[i_] + dist[i_][end[j]])
 				{
@@ -1581,29 +1584,29 @@ struct G_Tree
 		delete[] begin;
 		delete[] end;
 	}
-	idx_t find_LCA(idx_t x, idx_t y)//计算树上两节点xy的LCA
+	int find_LCA(int x, int y)//计算树上两节点xy的LCA
 	{
 		if (node[x].deep<node[y].deep)swap(x, y);
 		while (node[x].deep>node[y].deep)x = node[x].father;
 		while (x != y){ x = node[x].father; y = node[y].father; }
 		return x;
 	}
-	idx_t search(idx_t S, idx_t T)//查询S-T最短路长度
+	int search(int S, int T)//查询S-T最短路长度
 	{
 		if (S == T)return 0;
 		//计算LCA
-		idx_t i, j, k, p;
-		idx_t LCA, x = id_in_node[S], y = id_in_node[T];
+		int i, j, k, p;
+		int LCA, x = id_in_node[S], y = id_in_node[T];
 		if (node[x].deep<node[y].deep)swap(x, y);
 		while (node[x].deep>node[y].deep)x = node[x].father;
 		while (x != y){ x = node[x].father; y = node[y].father; }
 		LCA = x;
-		vector<idx_t>dist[2], dist_;
+		vector<int>dist[2], dist_;
 		dist[0].push_back(0);
 		dist[1].push_back(0);
 		x = id_in_node[S], y = id_in_node[T];
 		//朴素G-Tree计算
-		for (idx_t t = 0; t<2; t++)
+		for (int t = 0; t<2; t++)
 		{
 			if (t == 0)p = x;
 			else p = y;
@@ -1615,12 +1618,12 @@ struct G_Tree
 			if (t == 0)x = p;
 			else y = p;
 		}
-		vector<idx_t>id[2];//子结点border在LCA中的border序列编号
-		for (idx_t t = 0; t<2; t++)
+		vector<int>id[2];//子结点border在LCA中的border序列编号
+		for (int t = 0; t<2; t++)
 		{
 			if (t == 0)p = x;
 			else p = y;
-			for (i = j = 0; i<(idx_t)dist[t].size(); i++)
+			for (i = j = 0; i<(int)dist[t].size(); i++)
 				if (node[p].border_in_father[i] != -1)
 				{
 					id[t].push_back(node[p].border_in_father[i]);
@@ -1630,10 +1633,10 @@ struct G_Tree
 			while (dist[t].size()>id[t].size()){ dist[t].pop_back(); }
 		}
 		//最终配对
-		idx_t MIN = INF;
+		int MIN = INF;
 		for (i = 0; i<dist[0].size(); i++)
 		{
-			idx_t i_ = id[0][i];
+			int i_ = id[0][i];
 			for (j = 0; j<dist[1].size(); j++)
 			{
 				k = dist[0][i] + dist[1][j] + node[LCA].dist.a[i_][id[1][j]];
@@ -1642,18 +1645,18 @@ struct G_Tree
 		}
 		return MIN;
 	}
-	idx_t search_catch(idx_t S, idx_t T, idx_t bound = INF)//查询S-T最短路长度,并将沿途结点的catch处理为S的结果，其中不计算权值>=bound的部分，若没有则剪枝返回INF
+	int search_catch(int S, int T, int bound = INF)//查询S-T最短路长度,并将沿途结点的catch处理为S的结果，其中不计算权值>=bound的部分，若没有则剪枝返回INF
 	{
 		//朴素G-Tree计算,维护catch
 		if (S == T)return 0;
 		//计算LCA
-		idx_t i, j, k, p;
-		idx_t x = id_in_node[S], y = id_in_node[T];
-		idx_t LCA = find_LCA(x, y);
+		int i, j, k, p;
+		int x = id_in_node[S], y = id_in_node[T];
+		int LCA = find_LCA(x, y);
 
 		//计算两个叶子到LCA沿途结点编号
-		vector<idx_t>node_path[2];//点x/y到LCA之前依次会经过的树结点编号
-		for (idx_t t = 0; t<2; t++)
+		vector<int>node_path[2];//点x/y到LCA之前依次会经过的树结点编号
+		for (int t = 0; t<2; t++)
 		{
 			if (t == 0)p = x;
 			else p = y;
@@ -1682,7 +1685,7 @@ struct G_Tree
 		if (node[x].min_border_dist >= bound)return INF;
 		push_borders_brother_catch(x, y);
 		//将T在LCA下层的数据push到底层结点T
-		for (idx_t i = node_path[1].size() - 1; i>0; i--)
+		for (int i = node_path[1].size() - 1; i>0; i--)
 		{
 			if (node[node_path[1][i]].min_border_dist >= bound)return INF;
 			push_borders_down_catch(node_path[1][i], node_path[1][i - 1]);
@@ -1691,7 +1694,7 @@ struct G_Tree
 		//最终答案
 		return node[id_in_node[T]].catch_dist[0];
 	}
-	idx_t find_path(idx_t S, idx_t T, vector<idx_t> &order)//返回S-T最短路长度，并将沿途经过的结点方案存储到order数组中
+	int find_path(int S, int T, vector<int> &order)//返回S-T最短路长度，并将沿途经过的结点方案存储到order数组中
 	{
 		order.clear();
 		if (S == T)
@@ -1702,13 +1705,13 @@ struct G_Tree
 		//计算LCA
 		times[0] -= clock();
 		times[4] -= clock();
-		idx_t i, j, k, p;
-		idx_t LCA, x = id_in_node[S], y = id_in_node[T];
+		int i, j, k, p;
+		int LCA, x = id_in_node[S], y = id_in_node[T];
 		if (node[x].deep<node[y].deep)swap(x, y);
 		while (node[x].deep>node[y].deep)x = node[x].father;
 		while (x != y){ x = node[x].father; y = node[y].father; }
 		LCA = x;
-		vector<idx_t>dist[2], dist_;
+		vector<int>dist[2], dist_;
 		dist[0].push_back(0);
 		dist[1].push_back(0);
 		x = id_in_node[S], y = id_in_node[T];
@@ -1717,7 +1720,7 @@ struct G_Tree
 		//printf("LCA=%d x=%d y=%d\n",LCA,x,y);
 		times[4] += clock();
 		times[2] -= clock();
-		for (idx_t t = 0; t<2; t++)
+		for (int t = 0; t<2; t++)
 		{
 			if (t == 0)p = x;
 			else p = y;
@@ -1731,12 +1734,12 @@ struct G_Tree
 		}
 		times[2] += clock();
 		times[3] -= clock();
-		vector<idx_t>id[2];//子结点border在LCA中的border序列编号
-		for (idx_t t = 0; t<2; t++)
+		vector<int>id[2];//子结点border在LCA中的border序列编号
+		for (int t = 0; t<2; t++)
 		{
 			if (t == 0)p = x;
 			else p = y;
-			for (i = j = 0; i<(idx_t)dist[t].size(); i++)
+			for (i = j = 0; i<(int)dist[t].size(); i++)
 				if (node[p].border_in_father[i] != -1)
 				{
 					id[t].push_back(node[p].border_in_father[i]);
@@ -1748,10 +1751,10 @@ struct G_Tree
 		times[3] += clock();
 		//最终配对
 		times[1] -= clock();
-		idx_t MIN = INF;
-		idx_t S_ = -1, T_ = -1;//最优路径在LCA中borders连接的编号
-		for (i = 0; i<(idx_t)dist[0].size(); i++)
-			for (j = 0; j<(idx_t)dist[1].size(); j++)
+		int MIN = INF;
+		int S_ = -1, T_ = -1;//最优路径在LCA中borders连接的编号
+		for (i = 0; i<(int)dist[0].size(); i++)
+			for (j = 0; j<(int)dist[1].size(); j++)
 			{
 				k = dist[0][i] + dist[1][j] + node[LCA].dist.a[id[0][i]][id[1][j]];
 				if (k<MIN)
@@ -1763,9 +1766,9 @@ struct G_Tree
 			}
 		if (MIN<INF)//存在路径，恢复路径
 		{
-			for (idx_t t = 0; t<2; t++)
+			for (int t = 0; t<2; t++)
 			{
-				idx_t p, now;
+				int p, now;
 				if (t == 0)p = x, now = node[LCA].border_in_son[S_];
 				else p = y, now = node[LCA].border_in_son[T_];
 				while (node[p].n>1)
@@ -1778,7 +1781,7 @@ struct G_Tree
 					}
 					else if (node[p].path_record[now]>-INF)
 					{
-						idx_t temp = now;
+						int temp = now;
 						now = node[p].border_in_son[now];
 						p = -node[p].path_record[temp];
 					}
@@ -1797,10 +1800,10 @@ struct G_Tree
 		return MIN;
 		//cout<<"QY5";
 	}
-	idx_t real_border_number(idx_t x)//计算x真实的border数(忽略内部子图之间的border)
+	int real_border_number(int x)//计算x真实的border数(忽略内部子图之间的border)
 	{
-		idx_t i, j, re = 0, id;
-		map<idx_t, idx_t>vis;
+		int i, j, re = 0, id;
+		map<int, int>vis;
 		for (i = 0; i<node[x].G.n; i++)vis[node[x].G.id[i]] = 1;
 		for (i = 0; i<node[x].G.n; i++)
 		{
@@ -1814,7 +1817,7 @@ struct G_Tree
 		}
 		return re;
 	}
-	void find_path_border(idx_t x, idx_t S, idx_t T, vector<idx_t> &v, idx_t rev)//返回结点x中编号为S到T的border的结点路径，存储在vector<idx_t>中，将除了起点S以外的部分S+1~T，push到v尾部,rev=0表示正序，rev=1表示逆序
+	void find_path_border(int x, int S, int T, vector<int> &v, int rev)//返回结点x中编号为S到T的border的结点路径，存储在vector<int>中，将除了起点S以外的部分S+1~T，push到v尾部,rev=0表示正序，rev=1表示逆序
 	{
 		/*printf("find:x=%d S=%d T=%d\n",x,S,T);
 		printf("node:%d\n",x);
@@ -1835,7 +1838,7 @@ struct G_Tree
 		}
 		else if (node[x].order.a[S][T] >= 0)
 		{
-			idx_t k = node[x].order.a[S][T];
+			int k = node[x].order.a[S][T];
 			if (rev == 0)
 			{
 				find_path_border(x, S, k, v, rev);
@@ -1848,17 +1851,17 @@ struct G_Tree
 			}
 		}
 	}
-	vector<idx_t> KNN(idx_t S, idx_t K, vector<idx_t>T)//计算S到T数组中的前K小并返回其在T数组中的下标
+	vector<int> KNN(int S, int K, vector<int>T)//计算S到T数组中的前K小并返回其在T数组中的下标
 	{
-		priority_queue<idx_t>K_Value;//保存K小值
-		vector<pair<idx_t, idx_t> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
-		for (idx_t i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
+		priority_queue<int>K_Value;//保存K小值
+		vector<pair<int, int> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
+		for (int i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
 		sort(query.begin(), query.end());
-		vector<idx_t>re, ans;
+		vector<int>re, ans;
 		if (K <= 0)return re;
-		for (idx_t i = 0; i<T.size(); i++)
+		for (int i = 0; i<T.size(); i++)
 		{
-			idx_t bound = K_Value.size()<K ? INF : K_Value.top();
+			int bound = K_Value.size()<K ? INF : K_Value.top();
 			//if(bound==INF)printf("- ");else printf("%d ",bound);
 			if (Optimization_KNN_Cut)ans.push_back(search_catch(S, T[query[i].second], bound));
 			else ans.push_back(search_catch(S, T[query[i].second]));
@@ -1869,24 +1872,24 @@ struct G_Tree
 				K_Value.push(ans[i]);
 			}
 		}
-		idx_t bound = (ans.size() <= K) ? INF : K_Value.top();
-		for (idx_t i = 0; i<T.size() && re.size()<K; i++)
+		int bound = (ans.size() <= K) ? INF : K_Value.top();
+		for (int i = 0; i<T.size() && re.size()<K; i++)
 			if (ans[i] <= bound)
 				re.push_back(query[i].second);
 		sort(re.begin(), re.end());
 		return re;
 	}
-	vector<idx_t> KNN(idx_t S, idx_t K, vector<idx_t>T, vector<idx_t>offset)//计算S到T数组中的前K小并返回其在T数组中的下标,考虑车到结点距离offset
+	vector<int> KNN(int S, int K, vector<int>T, vector<int>offset)//计算S到T数组中的前K小并返回其在T数组中的下标,考虑车到结点距离offset
 	{
-		priority_queue<idx_t>K_Value;//保存K小值
-		vector<pair<idx_t, idx_t> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
-		for (idx_t i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
+		priority_queue<int>K_Value;//保存K小值
+		vector<pair<int, int> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
+		for (int i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
 		sort(query.begin(), query.end());
-		vector<idx_t>re, ans;
+		vector<int>re, ans;
 		if (K <= 0)return re;
-		for (idx_t i = 0; i<T.size(); i++)
+		for (int i = 0; i<T.size(); i++)
 		{
-			idx_t bound = K_Value.size()<K ? INF : K_Value.top();
+			int bound = K_Value.size()<K ? INF : K_Value.top();
 			//if(bound==INF)printf("- ");else printf("%d ",bound);
 			if (Optimization_KNN_Cut)ans.push_back(search_catch(S, T[query[i].second], bound) + offset[query[i].second]);
 			else ans.push_back(search_catch(S, T[query[i].second]) + offset[query[i].second]);
@@ -1897,22 +1900,22 @@ struct G_Tree
 				K_Value.push(ans[i]);
 			}
 		}
-		idx_t bound = (ans.size() <= K) ? INF : K_Value.top();
-		for (idx_t i = 0; i<T.size() && re.size()<K; i++)
+		int bound = (ans.size() <= K) ? INF : K_Value.top();
+		for (int i = 0; i<T.size() && re.size()<K; i++)
 			if (ans[i] <= bound)
 				re.push_back(query[i].second);
 		sort(re.begin(), re.end());
 		return re;
 	}
-	vector<idx_t> KNN_bound(idx_t S, idx_t K, vector<idx_t>T, idx_t bound)//计算S到T数组中的前K小并返回其在T数组中的下标
+	vector<int> KNN_bound(int S, int K, vector<int>T, int bound)//计算S到T数组中的前K小并返回其在T数组中的下标
 	{
-		priority_queue<idx_t>K_Value;//保存K小值
-		vector<pair<idx_t, idx_t> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
-		for (idx_t i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
+		priority_queue<int>K_Value;//保存K小值
+		vector<pair<int, int> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
+		for (int i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
 		sort(query.begin(), query.end());
-		vector<idx_t>re, ans;
+		vector<int>re, ans;
 		if (K <= 0)return re;
-		for (idx_t i = 0; i<T.size(); i++)
+		for (int i = 0; i<T.size(); i++)
 		{
 			if (Optimization_KNN_Cut)ans.push_back(search_catch(S, T[query[i].second], bound));
 			else ans.push_back(search_catch(S, T[query[i].second]));
@@ -1923,21 +1926,21 @@ struct G_Tree
 				K_Value.push(ans[i]);
 			}
 		}
-		for (idx_t i = 0; i<T.size() && re.size()<K; i++)
+		for (int i = 0; i<T.size() && re.size()<K; i++)
 			if (ans[i] <= bound)
 				re.push_back(query[i].second);
 		sort(re.begin(), re.end());
 		return re;
 	}
-	vector<idx_t> KNN_bound(idx_t S, idx_t K, vector<idx_t>T, idx_t bound, vector<idx_t>offset)//计算S到T数组中的前K小并返回其在T数组中的下标,考虑车到结点距离offset
+	vector<int> KNN_bound(int S, int K, vector<int>T, int bound, vector<int>offset)//计算S到T数组中的前K小并返回其在T数组中的下标,考虑车到结点距离offset
 	{
-		priority_queue<idx_t>K_Value;//保存K小值
-		vector<pair<idx_t, idx_t> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
-		for (idx_t i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
+		priority_queue<int>K_Value;//保存K小值
+		vector<pair<int, int> >query;//first:该查询的优先级(越低越靠前)，second该查询在原序列T中的id
+		for (int i = 0; i<T.size(); i++)query.push_back(make_pair(-node[find_LCA(id_in_node[S], id_in_node[T[i]])].deep, i));
 		sort(query.begin(), query.end());
-		vector<idx_t>re, ans;
+		vector<int>re, ans;
 		if (K <= 0)return re;
-		for (idx_t i = 0; i<T.size(); i++)
+		for (int i = 0; i<T.size(); i++)
 		{
 			if (Optimization_KNN_Cut)ans.push_back(search_catch(S, T[query[i].second], bound) + offset[query[i].second]);
 			else ans.push_back(search_catch(S, T[query[i].second]) + offset[query[i].second]);
@@ -1948,44 +1951,44 @@ struct G_Tree
 				K_Value.push(ans[i]);
 			}
 		}
-		for (idx_t i = 0; i<T.size() && re.size()<K; i++)
+		for (int i = 0; i<T.size() && re.size()<K; i++)
 			if (ans[i] <= bound)
 				re.push_back(query[i].second);
 		sort(re.begin(), re.end());
 		return re;
 	}
-	vector<idx_t> Range(idx_t S, idx_t R, vector<idx_t>T)//计算S到T数组中距离小于R的终点T并返回其在T数组中的下标
+	vector<int> Range(int S, int R, vector<int>T)//计算S到T数组中距离小于R的终点T并返回其在T数组中的下标
 	{
-		vector<idx_t>re;
-		for (idx_t i = 0; i<T.size(); i++)
+		vector<int>re;
+		for (int i = 0; i<T.size(); i++)
 		{
 			if (search_catch(S, T[i], Optimization_KNN_Cut ? R : INF)<R)re.push_back(i);
 		}
 		return re;
 	}
-	vector<idx_t> Range(idx_t S, idx_t R, vector<idx_t>T, vector<idx_t>offset)//计算S到T数组中距离小于R的终点T并返回其在T数组中的下标,考虑车到结点距离offset
+	vector<int> Range(int S, int R, vector<int>T, vector<int>offset)//计算S到T数组中距离小于R的终点T并返回其在T数组中的下标,考虑车到结点距离offset
 	{
-		vector<idx_t>re;
-		for (idx_t i = 0; i<T.size(); i++)
+		vector<int>re;
+		for (int i = 0; i<T.size(); i++)
 		{
 			if (offset[i] + search_catch(S, T[i], Optimization_KNN_Cut ? R : INF)<R)re.push_back(i);
 		}
 		return re;
 	}
-	void add_car(idx_t node_id, idx_t car_id)//向车辆集合中增加一辆位于结点编号：node_id的车，车的编号为car_id
+	void add_car(int node_id, int car_id)//向车辆集合中增加一辆位于结点编号：node_id的车，车的编号为car_id
 	{
 		car_in_node[node_id].push_back(car_id);
 		if (car_in_node[node_id].size() == 1)
 		{
 			//增加node_id更新距离border最小距离
-			idx_t S = id_in_node[node_id];
+			int S = id_in_node[node_id];
 			node[S].min_car_dist[0] = make_pair(0, node_id);
-			for (idx_t p = S; push_borders_up_add_min_car_dist(p, node_id); p = node[p].father);
+			for (int p = S; push_borders_up_add_min_car_dist(p, node_id); p = node[p].father);
 		}
 	}
-	void del_car(idx_t node_id, idx_t car_id)//从车辆集合中删除一辆位于结点编号：node_id的车，车的编号为car_id
+	void del_car(int node_id, int car_id)//从车辆集合中删除一辆位于结点编号：node_id的车，车的编号为car_id
 	{
-		idx_t i;
+		int i;
 		for (i = 0; i<car_in_node[node_id].size(); i++)
 			if (car_in_node[node_id][i] == car_id)break;
 		if (i == car_in_node[node_id].size())printf("Error: del_car find none car!");
@@ -1994,29 +1997,29 @@ struct G_Tree
 		if (car_in_node[node_id].size() == 0)
 		{
 			//删除node_id更新距border最小距离
-			idx_t S = id_in_node[node_id];
+			int S = id_in_node[node_id];
 			node[S].min_car_dist[0] = make_pair(INF, -1);
-			for (idx_t p = S; push_borders_up_del_min_car_dist(p, node_id); p = node[p].father);
+			for (int p = S; push_borders_up_del_min_car_dist(p, node_id); p = node[p].father);
 		}
 	}
-	void change_car_offset(idx_t car_id, idx_t dist)//修改车car_id到其所在结点的距离dist
+	void change_car_offset(int car_id, int dist)//修改车car_id到其所在结点的距离dist
 	{
 		while (car_offset.size() <= car_id)car_offset.push_back(0);
 		car_offset[car_id] = dist;
 	}
-	idx_t get_car_offset(idx_t car_id)//查询车car_id的距离偏移量
+	int get_car_offset(int car_id)//查询车car_id的距离偏移量
 	{
 		while (car_offset.size() <= car_id)car_offset.push_back(0);
 		return car_offset[car_id];
 	}
-	idx_t begin[10000], end[10000];//已算出的序列编号,未算出的序列编号
-	bool push_borders_up_add_min_car_dist(idx_t x, idx_t start_id)//用结点x的min_car_dist更新x.father的，其中只更新node_id=start_id的部分，若不存在则返回false，否则返回true
+	int begin[10000], end[10000];//已算出的序列编号,未算出的序列编号
+	bool push_borders_up_add_min_car_dist(int x, int start_id)//用结点x的min_car_dist更新x.father的，其中只更新node_id=start_id的部分，若不存在则返回false，否则返回true
 	{
-		idx_t re = false;
+		int re = false;
 		if (node[x].father == 0)return re;
-		idx_t y = node[x].father;
-		vector<pair<idx_t, idx_t> > *dist1 = &node[x].min_car_dist, *dist2 = &node[y].min_car_dist;
-		for (idx_t i = 0; i<node[x].borders.size(); i++)
+		int y = node[x].father;
+		vector<pair<int, int> > *dist1 = &node[x].min_car_dist, *dist2 = &node[y].min_car_dist;
+		for (int i = 0; i<node[x].borders.size(); i++)
 			if (node[x].min_car_dist[i].second == start_id)
 			{
 				re = true;
@@ -2028,17 +2031,17 @@ struct G_Tree
 			}
 		if (y != root)
 		{
-			idx_t **dist = node[y].dist.a;
-			idx_t tot0 = 0, tot1 = 0;
-			for (idx_t i = 0; i<(*dist2).size(); i++)
+			int **dist = node[y].dist.a;
+			int tot0 = 0, tot1 = 0;
+			for (int i = 0; i<(*dist2).size(); i++)
 			{
 				if ((*dist2)[i].second == start_id)begin[tot0++] = i;
 				else end[tot1++] = i;
 			}
-			for (idx_t i = 0; i<tot0; i++)
+			for (int i = 0; i<tot0; i++)
 			{
-				idx_t i_ = begin[i];
-				for (idx_t j = 0; j<tot1; j++)
+				int i_ = begin[i];
+				for (int j = 0; j<tot1; j++)
 				{
 					if ((*dist2)[end[j]].first>(*dist2)[i_].first + dist[end[j]][i_])
 					{
@@ -2050,19 +2053,19 @@ struct G_Tree
 		}
 		return re;
 	}
-	bool push_borders_up_del_min_car_dist(idx_t x, idx_t start_id)//删除x.father中node_id=start_id的min_car_dist,并用其他值更新,若不存在返回false，否则返回true
+	bool push_borders_up_del_min_car_dist(int x, int start_id)//删除x.father中node_id=start_id的min_car_dist,并用其他值更新,若不存在返回false，否则返回true
 	{
 		if (DEBUG_)printf("push_borders_up_del_min_car_dist x=%d id=%d \n", x, start_id);
-		idx_t re = false;
+		int re = false;
 		if (node[x].father == 0)return false;
-		idx_t y = node[x].father;
-		//printf("min_car_dist ");for(idx_t i=0;i<node[y].min_car_dist.size();i++)printf("(i:%d,D:%d,id:%d)",i,node[y].min_car_dist[i].first,node[y].min_car_dist[i].second);printf("\n");
-		vector<pair<idx_t, idx_t> > *dist1 = &node[x].min_car_dist, *dist2 = &node[y].min_car_dist;
-		if (DEBUG_)for (idx_t i = 0; i<node[x].borders.size(); i++)if (node[x].min_car_dist[i].second == start_id){ printf("WRong!!!!%d %d\n", x, start_id); while (1); }
-		idx_t tot0 = 0, tot1 = 0;
+		int y = node[x].father;
+		//printf("min_car_dist ");for(int i=0;i<node[y].min_car_dist.size();i++)printf("(i:%d,D:%d,id:%d)",i,node[y].min_car_dist[i].first,node[y].min_car_dist[i].second);printf("\n");
+		vector<pair<int, int> > *dist1 = &node[x].min_car_dist, *dist2 = &node[y].min_car_dist;
+		if (DEBUG_)for (int i = 0; i<node[x].borders.size(); i++)if (node[x].min_car_dist[i].second == start_id){ printf("WRong!!!!%d %d\n", x, start_id); while (1); }
+		int tot0 = 0, tot1 = 0;
 		if (y == root)//删除x.father中关于node_id的数据
 		{
-			for (idx_t i = 0; i<node[x].borders.size(); i++)
+			for (int i = 0; i<node[x].borders.size(); i++)
 				if (node[x].border_in_father[i] != -1)
 				{
 					if ((*dist2)[node[x].border_in_father[i]].second == start_id)
@@ -2071,7 +2074,7 @@ struct G_Tree
 						re = true;
 					}
 				}
-			for (idx_t i = 0; i<node[x].borders.size(); i++)
+			for (int i = 0; i<node[x].borders.size(); i++)
 			{
 				if (node[x].border_in_father[i] != -1)
 				{
@@ -2082,8 +2085,8 @@ struct G_Tree
 		}
 		else
 		{
-			idx_t SIZE = node[y].borders.size();
-			for (idx_t i = 0; i<SIZE; i++)
+			int SIZE = node[y].borders.size();
+			for (int i = 0; i<SIZE; i++)
 			{
 				if ((*dist2)[i].second == start_id)
 				{
@@ -2098,11 +2101,11 @@ struct G_Tree
 		{
 			if (y != root)
 			{
-				idx_t **dist = node[y].dist.a;
-				for (idx_t i = 0; i<tot0; i++)
+				int **dist = node[y].dist.a;
+				for (int i = 0; i<tot0; i++)
 				{
-					idx_t i_ = begin[i];
-					for (idx_t j = 0; j<tot1; j++)
+					int i_ = begin[i];
+					for (int j = 0; j<tot1; j++)
 					{
 						if ((*dist2)[end[j]].first>(*dist2)[i_].first + dist[end[j]][i_])
 						{
@@ -2114,12 +2117,12 @@ struct G_Tree
 				//二次DP
 				while (tot1)
 				{
-					for (idx_t i = 0; i<tot1 - 1; i++)
+					for (int i = 0; i<tot1 - 1; i++)
 						if ((*dist2)[end[i]].first<(*dist2)[end[i + 1]].first)swap(end[i], end[i + 1]);
 					tot1--;
 					//用end[tot1]重新增广dist2
-					idx_t i_ = end[tot1];
-					for (idx_t j = 0; j<tot1; j++)
+					int i_ = end[tot1];
+					for (int j = 0; j<tot1; j++)
 					{
 						if ((*dist2)[end[j]].first>(*dist2)[i_].first + dist[i_][end[j]])
 						{
@@ -2133,32 +2136,32 @@ struct G_Tree
 		//if(DEBUG_)printf("re=%d\n",re);
 		return re;
 	}
-	idx_t push_borders_up_catch_KNN_min_dist_car(idx_t x)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x.father真实border的距离更新x.father.catch，并返回父亲结点border中最远距离(用于KNN扩张剪枝)
+	int push_borders_up_catch_KNN_min_dist_car(int x)//将S到结点x边界点缓存在x.catch_dist的最短路长度，计算S到x.father真实border的距离更新x.father.catch，并返回父亲结点border中最远距离(用于KNN扩张剪枝)
 	{
 		if (node[x].father == 0)return INF;
-		idx_t re = INF + 1;
-		idx_t y = node[x].father;
+		int re = INF + 1;
+		int y = node[x].father;
 		node[y].catch_id = node[x].catch_id;
 		node[y].catch_bound = -1;
-		vector<idx_t> *dist1 = &node[x].catch_dist, *dist2 = &node[y].catch_dist;
-		for (idx_t i = 0; i<(*dist2).size(); i++)(*dist2)[i] = INF;
-		for (idx_t i = 0; i<node[x].borders.size(); i++)
+		vector<int> *dist1 = &node[x].catch_dist, *dist2 = &node[y].catch_dist;
+		for (int i = 0; i<(*dist2).size(); i++)(*dist2)[i] = INF;
+		for (int i = 0; i<node[x].borders.size(); i++)
 			if (node[x].border_in_father[i] != -1)
 				(*dist2)[node[x].border_in_father[i]] = (*dist1)[i];
-		idx_t **dist = node[y].dist.a;
-		idx_t *begin, *end;//已算出的序列编号,未算出的序列编号
-		begin = new idx_t[node[x].borders.size()];
-		end = new idx_t[node[y].borders.size()];
-		idx_t tot0 = 0, tot1 = 0;
-		for (idx_t i = 0; i<(*dist2).size(); i++)
+		int **dist = node[y].dist.a;
+		int *begin, *end;//已算出的序列编号,未算出的序列编号
+		begin = new int[node[x].borders.size()];
+		end = new int[node[y].borders.size()];
+		int tot0 = 0, tot1 = 0;
+		for (int i = 0; i<(*dist2).size(); i++)
 		{
 			if ((*dist2)[i]<INF)begin[tot0++] = i;
 			else end[tot1++] = i;
 		}
-		for (idx_t i = 0; i<tot0; i++)
+		for (int i = 0; i<tot0; i++)
 		{
-			idx_t i_ = begin[i];
-			for (idx_t j = 0; j<tot1; j++)
+			int i_ = begin[i];
+			for (int j = 0; j<tot1; j++)
 			{
 				if ((*dist2)[end[j]]>(*dist2)[i_] + dist[i_][end[j]])
 					(*dist2)[end[j]] = (*dist2)[i_] + dist[i_][end[j]];
@@ -2166,38 +2169,38 @@ struct G_Tree
 		}
 		if (y == root)re = INF + 1;
 		else
-			for (idx_t i = 0; i<node[y].borders.size(); i++)
+			for (int i = 0; i<node[y].borders.size(); i++)
 				if (node[y].border_in_father[i] != -1)
 					re = min(re, (*dist2)[i]);
 		delete[] begin;
 		delete[] end;
 		return re;
 	}
-	vector<idx_t> KNN_min_dist_car(idx_t S, idx_t K)//计算S到car集合中的前K小并返回其车辆编号
+	vector<int> KNN_min_dist_car(int S, int K)//计算S到car集合中的前K小并返回其车辆编号
 	{
 		//动态扩张优化：catch计算到某一层，只有K距离超过当前层最远点，或当前层无车时扩张
-		idx_t Now_Catch_P = id_in_node[S], Now_Catch_Dist = 0;//现在的S的catch做到那个结点，动态扩张
-		priority_queue<pair<idx_t, pair<idx_t, idx_t> > >q;//保存K小值<-dist,<node_id,border_id>>
+		int Now_Catch_P = id_in_node[S], Now_Catch_Dist = 0;//现在的S的catch做到那个结点，动态扩张
+		priority_queue<pair<int, pair<int, int> > >q;//保存K小值<-dist,<node_id,border_id>>
 		{//构建S的catch
 			node[id_in_node[S]].catch_id = S;
 			node[id_in_node[S]].catch_bound = INF;
 			node[id_in_node[S]].min_border_dist = 0;
 			node[id_in_node[S]].catch_dist[0] = 0;
-			/*for(idx_t p=id_in_node[S];p!=root;p=node[p].father)
+			/*for(int p=id_in_node[S];p!=root;p=node[p].father)
 			push_borders_up_catch_KNN_min_dist_car(p);*/
 		}
 		//建立PQ
-		for (idx_t i = 0; i<node[Now_Catch_P].borders.size(); i++)
+		for (int i = 0; i<node[Now_Catch_P].borders.size(); i++)
 			q.push(make_pair(-(node[Now_Catch_P].catch_dist[i] + node[Now_Catch_P].min_car_dist[i].first), make_pair(Now_Catch_P, i)));
-		vector<idx_t>ans, ans2;//车的编号及其所在结点
+		vector<int>ans, ans2;//车的编号及其所在结点
 		if (Distance_Offset == false)
 		{
 			while (K)
 			{
-				idx_t Dist = q.top().first;
-				idx_t node_id = q.top().second.first;
-				idx_t border_id = q.top().second.second;
-				idx_t real_Dist = -(node[node_id].catch_dist[border_id] + node[node_id].min_car_dist[border_id].first);
+				int Dist = q.top().first;
+				int node_id = q.top().second.first;
+				int border_id = q.top().second.second;
+				int real_Dist = -(node[node_id].catch_dist[border_id] + node[node_id].min_car_dist[border_id].first);
 				if (Dist != real_Dist)
 				{
 					q.pop();
@@ -2208,16 +2211,16 @@ struct G_Tree
 				{
 					Now_Catch_Dist = push_borders_up_catch_KNN_min_dist_car(Now_Catch_P);
 					Now_Catch_P = node[Now_Catch_P].father;
-					for (idx_t i = 0; i<node[Now_Catch_P].borders.size(); i++)
+					for (int i = 0; i<node[Now_Catch_P].borders.size(); i++)
 					{
 						q.push(make_pair(-(node[Now_Catch_P].catch_dist[i] + node[Now_Catch_P].min_car_dist[i].first), make_pair(Now_Catch_P, i)));
 					}
 					continue;
 				}
-				idx_t real_node_id = node[node_id].min_car_dist[border_id].second;
+				int real_node_id = node[node_id].min_car_dist[border_id].second;
 
 				if (real_node_id == -1)break;
-				idx_t car_id = car_in_node[real_node_id][0];
+				int car_id = car_in_node[real_node_id][0];
 				q.pop();
 				ans.push_back(car_id);
 				ans2.push_back(real_node_id);
@@ -2225,18 +2228,18 @@ struct G_Tree
 				q.push(make_pair(-(node[node_id].catch_dist[border_id] + node[node_id].min_car_dist[border_id].first), make_pair(node_id, border_id)));
 				K--;
 			}
-			for (idx_t i = 0; i<ans.size(); i++)add_car(ans2[i], ans[i]);
+			for (int i = 0; i<ans.size(); i++)add_car(ans2[i], ans[i]);
 		}
 		else
 		{
-			priority_queue<idx_t>KNN_Dist;
-			vector<idx_t>ans3;
+			priority_queue<int>KNN_Dist;
+			vector<int>ans3;
 			while (KNN_Dist.size()<K || KNN_Dist.top() <= -q.top().first)
 			{
-				idx_t Dist = q.top().first;
-				idx_t node_id = q.top().second.first;
-				idx_t border_id = q.top().second.second;
-				idx_t real_Dist = -(node[node_id].catch_dist[border_id] + node[node_id].min_car_dist[border_id].first);
+				int Dist = q.top().first;
+				int node_id = q.top().second.first;
+				int border_id = q.top().second.second;
+				int real_Dist = -(node[node_id].catch_dist[border_id] + node[node_id].min_car_dist[border_id].first);
 				if (Dist != real_Dist)
 				{
 					q.pop();
@@ -2247,18 +2250,18 @@ struct G_Tree
 				{
 					Now_Catch_Dist = push_borders_up_catch_KNN_min_dist_car(Now_Catch_P);
 					Now_Catch_P = node[Now_Catch_P].father;
-					for (idx_t i = 0; i<node[Now_Catch_P].borders.size(); i++)
+					for (int i = 0; i<node[Now_Catch_P].borders.size(); i++)
 						q.push(make_pair(-(node[Now_Catch_P].catch_dist[i] + node[Now_Catch_P].min_car_dist[i].first), make_pair(Now_Catch_P, i)));
 					continue;
 				}
-				idx_t real_node_id = node[node_id].min_car_dist[border_id].second;
+				int real_node_id = node[node_id].min_car_dist[border_id].second;
 
 				if (real_node_id == -1)break;
-				idx_t car_id = car_in_node[real_node_id][0];
+				int car_id = car_in_node[real_node_id][0];
 				q.pop();
 				del_car(real_node_id, car_id);
 				q.push(make_pair(-(node[node_id].catch_dist[border_id] + node[node_id].min_car_dist[border_id].first), make_pair(node_id, border_id)));
-				idx_t car_dist = get_car_offset(car_id) - real_Dist;
+				int car_dist = get_car_offset(car_id) - real_Dist;
 				if (KNN_Dist.size()<K)KNN_Dist.push(car_dist);
 				else if (KNN_Dist.top()>car_dist)
 				{
@@ -2269,25 +2272,25 @@ struct G_Tree
 				ans2.push_back(real_node_id);
 				ans3.push_back(car_dist);
 			}
-			for (idx_t i = 0; i<ans.size(); i++)add_car(ans2[i], ans[i]);
-			idx_t j = 0;
-			for (idx_t i = 0; i<ans.size(); i++)
+			for (int i = 0; i<ans.size(); i++)add_car(ans2[i], ans[i]);
+			int j = 0;
+			for (int i = 0; i<ans.size(); i++)
 				if (ans3[i] <= KNN_Dist.top())
 					ans[j++] = ans[i];
 			while (ans.size()>K)ans.pop_back();
 		}
 		return ans;
 	}
-	bool check_min_car_dist(idx_t x_ = -1)//检查x的min_car_dist是否DP成立
+	bool check_min_car_dist(int x_ = -1)//检查x的min_car_dist是否DP成立
 	{
-		for (idx_t x = (x_ == -1 ? node_tot : x_ + 1) - 1; x >= (x_ == -1 ? root : x_); x--)
+		for (int x = (x_ == -1 ? node_tot : x_ + 1) - 1; x >= (x_ == -1 ? root : x_); x--)
 		{
 			if (x == root)continue;
 			if (node[x].borders.size() == 1)continue;
-			idx_t i, j, ans;
+			int i, j, ans;
 			for (i = 0; i<node[x].borders.size(); i++)
 			{
-				ans = INF; idx_t ans_id = -1, order = -1;
+				ans = INF; int ans_id = -1, order = -1;
 				if (ans>node[node[x].son[node[x].color[node[x].border_id_innode[i]]]].min_car_dist[node[x].border_in_son[i]].first)
 				{
 					ans = node[node[x].son[node[x].color[node[x].border_id_innode[i]]]].min_car_dist[node[x].border_in_son[i]].first;
@@ -2316,23 +2319,23 @@ struct G_Tree
 		return true;
 	}
 }tree;
-struct Wide_KNN_//增量法计算KNN，返回最近邻的K个点在增量序列中的编号，查询前通过init(S,K)初始化，增量时调用update(vector<pair<double,idx_t> > a)传入欧几里得距离/编号二元组，若增量成功返回true，此时可用result()得到结果
+struct Wide_KNN_//增量法计算KNN，返回最近邻的K个点在增量序列中的编号，查询前通过init(S,K)初始化，增量时调用update(vector<pair<double,int> > a)传入欧几里得距离/编号二元组，若增量成功返回true，此时可用result()得到结果
 {
-	idx_t S,K,bound,dist_now,tot;
-	priority_queue<pair<idx_t,idx_t> >KNN;
-	double Euclid;idx_t Real_Dist;
-	vector<idx_t>re;
-	void init(idx_t s,idx_t k)
+	int S,K,bound,dist_now,tot;
+	priority_queue<pair<int,int> >KNN;
+	double Euclid;int Real_Dist;
+	vector<int>re;
+	void init(int s,int k)
 	{
 		S=s;K=k;tot=0;
 		Real_Dist=INF;Euclid=0;
 		while(KNN.size())KNN.pop();
 		re.clear();
 	}
-	bool update(vector<pair<double,pair<idx_t,idx_t> > > a)//<欧几里得距离,<结点编号，结点距离偏移>>
+	bool update(vector<pair<double,pair<int,int> > > a)//<欧几里得距离,<结点编号，结点距离偏移>>
 	{
 		sort(a.begin(),a.end());
-		for(idx_t i=0;i<a.size();i++)
+		for(int i=0;i<a.size();i++)
 		{
 			bound=KNN.size()<K?INF:KNN.top().first;
 			dist_now=tree.search_catch(S,a[i].second.first,bound)+a[i].second.second;
@@ -2353,7 +2356,7 @@ struct Wide_KNN_//增量法计算KNN，返回最近邻的K个点在增量序列�
 		}
 		return false;
 	}
-	vector<idx_t> result()
+	vector<int> result()
 	{
 		return re;
 	}
@@ -2372,12 +2375,12 @@ void read()
 	cout<<G.n<<" "<<G.m<<endl;
 	cout<<"correct2"<<endl;
 	G.init(G.n,G.m);
-	for(idx_t i=0;i<G.n;i++)G.id[i]=i;
+	for(int i=0;i<G.n;i++)G.id[i]=i;
 	cout<<"correct3"<<endl;
-	idx_t i,j,k,l;
+	int i,j,k,l;
 	for(i=0;i<G.m;i++)//读取边
 	{
-		//idx_t temp;
+		//int temp;
 		fscanf(in,"%d %d %d\n",&j,&k,&l);
 		if(RevE==false)G.add_D(j,k,l);//单向边
 		else G.add(j,k,l);//双向边
@@ -2393,7 +2396,7 @@ void read()
 		double d1,d2;
 		for(i=0;i<G.n;i++)//读取边
 		{
-			//idx_t temp;
+			//int temp;
 			fscanf(in,"%d %lf %lf\n",&j,&d1,&d2);
 			coordinate.push_back(coor(d1,d2));
 		}
@@ -2420,50 +2423,50 @@ void load()
 class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼车的哈密顿路径规划
 {
 	public:
-		void init(idx_t n,double (*ED)(idx_t,idx_t))//初始化车辆集合0~n-1，传入一个计算(node_id1,node_id2)欧几里得距离的函数
+		void init(int n,double (*ED)(int,int))//初始化车辆集合0~n-1，传入一个计算(node_id1,node_id2)欧几里得距离的函数
 		{
 			vehicle empty;
-			for(idx_t i=0;i<n;i++)cars.push_back(empty);
+			for(int i=0;i<n;i++)cars.push_back(empty);
 			Euclidean_Distance=ED;
 		}
-		void set(idx_t car_id,idx_t pos,idx_t offset=0)//设置第id辆车新的结点位置和偏移距离
+		void set(int car_id,int pos,int offset=0)//设置第id辆车新的结点位置和偏移距离
 		{
 			cars[car_id].set(pos,offset);
 		}
-		idx_t request(pair<idx_t,idx_t> OD,vector<idx_t> car_set)//规划新的OD请求应归于哪辆集合car_set中的车比较合适，并将其规划如车的路线中，并返回车的ID
+		int request(pair<int,int> OD,vector<int> car_set)//规划新的OD请求应归于哪辆集合car_set中的车比较合适，并将其规划如车的路线中，并返回车的ID
 		{
-			idx_t i,best_car_id=-1,n=car_set.size();
+			int i,best_car_id=-1,n=car_set.size();
 			long long value=(long long)INF*INF;
 			//欧几里得规划裁剪
 			{
-				vector<pair<idx_t,idx_t> >ans;//<欧几里得规划函数评估值,在car_set中的下标>
-				for(idx_t i=0;i<n;i++)cars[car_set[i]].push(OD.first,1);
-				for(idx_t i=0;i<n;i++)cars[car_set[i]].push(OD.second,1);
-				for(idx_t i=0;i<n;i++)
+				vector<pair<int,int> >ans;//<欧几里得规划函数评估值,在car_set中的下标>
+				for(int i=0;i<n;i++)cars[car_set[i]].push(OD.first,1);
+				for(int i=0;i<n;i++)cars[car_set[i]].push(OD.second,1);
+				for(int i=0;i<n;i++)
 				{
-					vector<idx_t>order;
+					vector<int>order;
 					ans.push_back(make_pair(cars[car_set[i]].solve_value(order),car_set[i]));
 
 				}
-				for(idx_t i=0;i<n;i++)
+				for(int i=0;i<n;i++)
 				{
 					cars[car_set[i]].pop(cars[car_set[i]].ODlist.size()-1);
 					cars[car_set[i]].pop(cars[car_set[i]].ODlist.size()-1);
 				}
 				sort(ans.begin(),ans.end());
 				//根据距离保留前K个
-				vector<idx_t> new_set;
-				for(idx_t i=0;i<Global_Scheduling_Cars_Per_Request&&i<ans.size();i++)
+				vector<int> new_set;
+				for(int i=0;i<Global_Scheduling_Cars_Per_Request&&i<ans.size();i++)
 					new_set.push_back(ans[i].second);
 				car_set=new_set;
 			}
 
 			//真实规划
-			for(idx_t i=0;i<n;i++)cars[car_set[i]].push(OD.first);
-			for(idx_t i=0;i<n;i++)cars[car_set[i]].push(OD.second);
-			for(idx_t i=0;i<n;i++)
+			for(int i=0;i<n;i++)cars[car_set[i]].push(OD.first);
+			for(int i=0;i<n;i++)cars[car_set[i]].push(OD.second);
+			for(int i=0;i<n;i++)
 			{
-				vector<idx_t>order;
+				vector<int>order;
 				long long now=cars[car_set[i]].solve_value(order);
 				if(now<value)
 				{
@@ -2471,7 +2474,7 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 					best_car_id=i;
 				}
 			}
-			for(idx_t i=0;i<n;i++)
+			for(int i=0;i<n;i++)
 				if(i!=best_car_id)
 				{
 					cars[car_set[i]].pop(cars[car_set[i]].ODlist.size()-1);
@@ -2480,11 +2483,11 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 				else cars[car_set[i]].solve_value(cars[car_set[i]].LastOrderList);
 			return car_set[best_car_id];
 		}
-		void del(idx_t car_id,idx_t node_id)
+		void del(int car_id,int node_id)
 		{
 			//车car_id已经到达node_id，维护vehicle信息
 			vehicle &car=cars[car_id];
-			for(idx_t i=0;i<car.ODlist.size();i++)
+			for(int i=0;i<car.ODlist.size();i++)
 			{
 				if(car.ODlist[i]==node_id)
 				{
@@ -2493,50 +2496,50 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 				}
 			}
 		}
-		idx_t order(idx_t car_id)
+		int order(int car_id)
 		{
 			//返回car_id最优规划中应前往的下一个OD点(不存在返回-1，error返回-2)
 			//需保证car.LastOrderList正确
 			vehicle &car=cars[car_id];
 			if(car.ODlist.size()==0)return -1;
-			for(idx_t i=0;i<car.ODlist.size();i++)
+			for(int i=0;i<car.ODlist.size();i++)
 				if(car.ODlist[car.LastOrderList[i]]!=-1)
 					return car.ODlist[car.LastOrderList[i]];
 			return -2;
 		}
-		static double (*Euclidean_Distance)(idx_t,idx_t);
-		idx_t GetPath(idx_t car_id,vector<idx_t> &path,vector<pair<idx_t,idx_t> > &OD)//path车经过的路径结点编号，OD（每个OD对在path中的下标），并返回路径长度
+		static double (*Euclidean_Distance)(int,int);
+		int GetPath(int car_id,vector<int> &path,vector<pair<int,int> > &OD)//path车经过的路径结点编号，OD（每个OD对在path中的下标），并返回路径长度
 		{
 			vehicle &car=cars[car_id];
-			vector<idx_t> Poidx_t;
+			vector<int> Point;
 			if(car.ODlist.size()==0)return 0;
-			for(idx_t i=0;i<car.ODlist.size();i++)
+			for(int i=0;i<car.ODlist.size();i++)
 				if(car.ODlist[car.LastOrderList[i]]!=-1)
 				{
-					Poidx_t.push_back(car.ODlist[car.LastOrderList[i]]);
+					Point.push_back(car.ODlist[car.LastOrderList[i]]);
 					if(car.LastOrderList[i]&1)
 						OD.push_back(make_pair(car.ODlist[car.LastOrderList[i-1]],car.ODlist[car.LastOrderList[i]]));
 				}
-			idx_t re=0;
+			int re=0;
 			path.clear();
 			path.push_back(car.position);
-			for(idx_t i=0;i<Poidx_t.size();i++)
+			for(int i=0;i<Point.size();i++)
 			{
-				vector<idx_t>path_now;
-				tree.find_path(Poidx_t[i],Poidx_t[i+1],path_now);
-				re+=tree.search(Poidx_t[i],Poidx_t[i+1]);
-				for(idx_t j=1;j<path_now.size();j++)
+				vector<int>path_now;
+				tree.find_path(Point[i],Point[i+1],path_now);
+				re+=tree.search(Point[i],Point[i+1]);
+				for(int j=1;j<path_now.size();j++)
 					path.push_back(path_now[j]);
 			}
-			for(idx_t i=0;i<OD.size();i++)
+			for(int i=0;i<OD.size();i++)
 			{
-				idx_t *now;
-				for(idx_t t=0;t<2;t++)
+				int *now;
+				for(int t=0;t<2;t++)
 				{
 					if(t==0 && OD[i].first!=-1)continue;
 					if(t==0)now=&OD[i].first;
 					else now=&OD[i].second;
-					for(idx_t i=0;i<path.size();i++)
+					for(int i=0;i<path.size();i++)
 						if(path[i]==*now)
 						{
 							*now=i;
@@ -2546,14 +2549,14 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 			}
 			return re;
 		}
-		idx_t Naive_Dist(idx_t car_id)//计算OD对之间的两两距离之和
+		int Naive_Dist(int car_id)//计算OD对之间的两两距离之和
 		{
-			idx_t re=0;
+			int re=0;
 
-			for(idx_t i=0;i<cars[car_id].ODlist.size();i+=2)
+			for(int i=0;i<cars[car_id].ODlist.size();i+=2)
 			{
-				idx_t u=cars[car_id].ODlist[i];
-				idx_t v=cars[car_id].ODlist[i+1];
+				int u=cars[car_id].ODlist[i];
+				int v=cars[car_id].ODlist[i+1];
 				if(u==-1)u=cars[car_id].position;
 				re+=tree.search(u,v);
 			}
@@ -2561,33 +2564,33 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 		}
 		struct vehicle
 		{
-			vector<idx_t>ODlist;//车上人员的OD点对集合(原图中的编号)，相邻两个为一组OD(若O点已到达则为-1)
+			vector<int>ODlist;//车上人员的OD点对集合(原图中的编号)，相邻两个为一组OD(若O点已到达则为-1)
 			Matrix dist;//ODlist之间的距离
-			idx_t position,offset;//车所在结点编号，车距离结点的偏移距离
-			vector<idx_t>pos_to_ODlist;//车当前所在节点距离ODlist中每个结点的距离
-			vector<idx_t>LastOrderList;//上一次路径规划的最优路线方案在ODlist中的下标
-			void push(idx_t id,idx_t type=0)//向ODlist后加入一个新点id并重做dist;type==0表示使用路网距离，type=1表示使用欧几里得距离Euclidean_Distance
+			int position,offset;//车所在结点编号，车距离结点的偏移距离
+			vector<int>pos_to_ODlist;//车当前所在节点距离ODlist中每个结点的距离
+			vector<int>LastOrderList;//上一次路径规划的最优路线方案在ODlist中的下标
+			void push(int id,int type=0)//向ODlist后加入一个新点id并重做dist;type==0表示使用路网距离，type=1表示使用欧几里得距离Euclidean_Distance
 			{
 				ODlist.push_back(id);
 				Matrix re;
 				re.init(dist.n+1);
-				for(idx_t i=0;i<re.n-1;i++)
-					for(idx_t j=0;j<re.n-1;j++)
+				for(int i=0;i<re.n-1;i++)
+					for(int j=0;j<re.n-1;j++)
 						re.a[i][j]=dist.a[i][j];
-				for(idx_t i=0;i<re.n;i++)
+				for(int i=0;i<re.n;i++)
 					if(type==0)re.a[i][re.n-1]=re.a[re.n-1][i]=tree.search_catch(id,ODlist[i]);
 					else re.a[i][re.n-1]=re.a[re.n-1][i]=Euclidean_Distance(id,ODlist[i]);
 				if(type==0)pos_to_ODlist.push_back(tree.search_catch(id,position));
 				else pos_to_ODlist.push_back(Euclidean_Distance(id,position));
 				dist=re;
 			}
-			void pop(idx_t id=0)//删除ODlist中第id号元素
+			void pop(int id=0)//删除ODlist中第id号元素
 			{
 				Matrix re;
 				re.init(dist.n-1);
-				for(idx_t i=0;i<re.n-1;i++)
-					for(idx_t j=0;j<re.n-1;j++)
-						re.a[i][j]=dist.a[i+(idx_t)(i>=id)][j+(idx_t)(j>=id)];
+				for(int i=0;i<re.n-1;i++)
+					for(int j=0;j<re.n-1;j++)
+						re.a[i][j]=dist.a[i+(int)(i>=id)][j+(int)(j>=id)];
 				while(id+1<ODlist.size())
 				{
 					swap(ODlist[id],ODlist[id+1]);
@@ -2598,28 +2601,28 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 				pos_to_ODlist.pop_back();
 				dist=re;
 			}
-			void set(idx_t pos,idx_t offset_=0)//设置车新的结点位置和偏移
+			void set(int pos,int offset_=0)//设置车新的结点位置和偏移
 			{
 				position=pos;
 				offset=offset_;
-				for(idx_t i=0;i<ODlist.size();i++)
+				for(int i=0;i<ODlist.size();i++)
 					pos_to_ODlist[i]=tree.search_catch(position,ODlist[i],INF);
 			}
-			idx_t evaluation(idx_t n,idx_t *p)
+			int evaluation(int n,int *p)
 			{
 
 				//仅依据距离之和
-				idx_t distance=pos_to_ODlist[p[0]]+offset;
-				for(idx_t i=0;i<n-1;i++)distance+=dist.a[p[i]][p[i+1]];
+				int distance=pos_to_ODlist[p[0]]+offset;
+				for(int i=0;i<n-1;i++)distance+=dist.a[p[i]][p[i+1]];
 				return distance;
 			}
-			long long solve_value(vector<idx_t> &order)//根据现有的ODlist规划方案，并返回行车路线长度，并将结果向量记录到&order里
+			long long solve_value(vector<int> &order)//根据现有的ODlist规划方案，并返回行车路线长度，并将结果向量记录到&order里
 			{
 				long long ans=1000000000LL*1000000000LL,now;
-				idx_t n=ODlist.size(),i,j;
-				idx_t *p;//permutation
-				p=new idx_t[n];
-				vector<idx_t>re;
+				int n=ODlist.size(),i,j;
+				int *p;//permutation
+				p=new int[n];
+				vector<int>re;
 				for(i=0;i<n;i++)p[i]=i;
 				while(1)
 				{
@@ -2658,60 +2661,60 @@ class Global_Scheduling//依托于G_Tree的全局调度算法，主要处理拼�
 
 
 struct Position {
-    idx_t id;
+    int id;
     double lg;
     double lt;
 
     Position() {}
-    Position(idx_t id, double lg, double lt): id(id), lg(lg), lt(lt) {}
+    Position(int id, double lg, double lt): id(id), lg(lg), lt(lt) {}
 };
 
 struct Car {
     Position p;
-    idx_t pnum;
+    int pnum;
     vector<Position> psgs;
 };
 
 vector<struct Position> nodes;
 vector<struct Car> cars;
-vector<idx_t> D1; // D1.size() == cars.size()
-vector<vector<idx_t>> node2cars;
+vector<int> D1; // D1.size() == cars.size()
+vector<vector<int>> node2cars;
 
-void findBestPath(Car& car, vector<idx_t>& order, idx_t dist[5][5], idx_t& D,
- idx_t sum, vector<idx_t>& order_cal, vector<bool>& v, idx_t last, idx_t depth) {
+void findBestPath(Car& car, vector<int>& order, int dist[5][5], int& D,
+ int sum, vector<int>& order_cal, vector<bool>& v, int last, int depth) {
     if (sum >= D) {
         return;
     }
     if (depth == car.pnum) {
         D = sum;
-        for (idx_t i = 0; i < car.pnum; i++) {
+        for (int i = 0; i < car.pnum; i++) {
             order[i] = order_cal[i];
         }
         return;
     }
-    for (idx_t i = 0; i < car.pnum; i++) {
+    for (int i = 0; i < car.pnum; i++) {
         if (!v[i]) {
             v[i] = true;
             order_cal[i] = car.psgs[i].id;
-            idx_t delta_dist = dist[last][i];
+            int delta_dist = dist[last][i];
             findBestPath(car, order, dist, D, sum + delta_dist, order_cal, v, i, depth + 1);
             v[i] = false;
         }
     }
 }
 
-idx_t findBestPath(Car& car, vector<idx_t>& order) {
+int findBestPath(Car& car, vector<int>& order) {
     order.resize(car.pnum);
-    idx_t dist[5][5];
-    for (idx_t i = 0; i < car.pnum; i++) {
+    int dist[5][5];
+    for (int i = 0; i < car.pnum; i++) {
         dist[i][4] = dist[4][i] = tree.search_catch(car.psgs[i].id, car.p.id);
-        for (idx_t j = i + 1; j < car.pnum; j++) {
+        for (int j = i + 1; j < car.pnum; j++) {
             dist[i][j] = dist[j][i] = tree.search_catch(car.psgs[i].id, car.psgs[j].id);
         }
     }
-    idx_t D = INF;
+    int D = INF;
     vector<bool> v(car.pnum, false);
-    vector<idx_t> order_cal(car.pnum);
+    vector<int> order_cal(car.pnum);
     findBestPath(car, order, dist, D, 0, order_cal, v, 4, 0);
     return D;
 }
@@ -2719,7 +2722,7 @@ idx_t findBestPath(Car& car, vector<idx_t>& order) {
 void loadNode() {
     ifstream fin("../data/road.cnode");
     nodes.clear();
-    idx_t id;
+    int id;
     double x, y;
     while (fin >> id >> x >> y) {
         nodes.push_back(Position(id, x, y));
@@ -2729,20 +2732,20 @@ void loadNode() {
 
 void loadCar() {
     ifstream fin("../data/car.txt");
-    idx_t carId, pnum;
-    idx_t index = 0;
+    int carId, pnum;
+    int index = 0;
     while (fin >> carId) {
         Car car;
         fin >> pnum;
         car.pnum = pnum;
         char c;
         double lg, lt;
-        idx_t nodeId;
+        int nodeId;
         fin >>lg >> c >> lt >> c >> nodeId;
         Position carP(nodeId, lg, lt);
         node2cars[nodeId].push_back(index);
         car.p = carP;
-        for (idx_t i = 0; i < pnum; i++) {
+        for (int i = 0; i < pnum; i++) {
             fin >>lg >> c >> lt >> c >> nodeId;
             Position psgP(nodeId, lg, lt);
             car.psgs.push_back(psgP);
@@ -2754,13 +2757,13 @@ void loadCar() {
 
 	// ofstream fout("../data/car.data");
     // for (Car &car : cars) {
-    //     vector<idx_t> order;
-    //     idx_t D = findBestPath(car, order);
+    //     vector<int> order;
+    //     int D = findBestPath(car, order);
     //     D1.push_back(D);
 	// 	fout << D << endl;
     // }
 	// fout.close();
-	idx_t D;
+	int D;
 	ifstream fin2("../data/car.data");
 	while (fin2 >> D) {
 		D1.push_back(D);
@@ -2769,42 +2772,42 @@ void loadCar() {
 }
 
 struct Cardist {
-	idx_t index;
-	idx_t dist;
+	int index;
+	int dist;
 
 	bool operator<(const Cardist& other) const {
 		return dist < other.dist;
 	}
 
 	Cardist() {}
-	Cardist(idx_t id, idx_t d): index(id), dist(d) {}
+	Cardist(int id, int d): index(id), dist(d) {}
 };
 
-void searchTaxi(idx_t S, idx_t T, idx_t K, vector<idx_t> &carIds_res, vector<vector<idx_t>>& routes_res, vector<vector<idx_t>> &order_res)
+void searchTaxi(int S, int T, int K, vector<int> &carIds_res, vector<vector<int>>& routes_res, vector<vector<int>> &order_res)
 {
-	idx_t D4 = tree.search(S, T);
+	int D4 = tree.search(S, T);
 
-	vector<vector<idx_t>> routes;
-	vector<idx_t> carIndexes;
+	vector<vector<int>> routes;
+	vector<int> carIndexes;
 	vector<Cardist> cardists;
 	carIndexes.clear();
     routes.clear();
 	cardists.clear();
 
 	cout << "Taxi searching begin." << endl;
-	idx_t index = 0;
-	idx_t total = cars.size();
-	for (idx_t carIndex = 0; carIndex < total; carIndex++) {
+	int index = 0;
+	int total = cars.size();
+	for (int carIndex = 0; carIndex < total; carIndex++) {
 		Car car = cars[carIndex];
 		if (car.pnum >= 4) continue;
-		idx_t D2 = tree.search(car.p.id, S);
+		int D2 = tree.search(car.p.id, S);
 		if (D2 > 10000) continue;
 		car.psgs.push_back(nodes[T]);
 		car.pnum += 1;
 		Position carP = car.p;
 		car.p = nodes[S];
-		vector<idx_t> order;
-		idx_t D3 = findBestPath(car, order);
+		vector<int> order;
+		int D3 = findBestPath(car, order);
 		assert(D3 >= D4);
 		assert(D2 + D3 - D1[carIndex] >= 0);
 		if (D3 - D4 > 10000) continue;
@@ -2816,22 +2819,22 @@ void searchTaxi(idx_t S, idx_t T, idx_t K, vector<idx_t> &carIds_res, vector<vec
 	}
 	cout << "Find " << index << " cars" << endl;
 	sort(cardists.begin(), cardists.end());
-	idx_t size = cardists.size() > 5 ? 5 : cardists.size();
-	for (idx_t i = 0; i < size; i++) {
+	int size = cardists.size() > 5 ? 5 : cardists.size();
+	for (int i = 0; i < size; i++) {
 		carIds_res.push_back(carIndexes[cardists[i].index]);
-		vector<idx_t>& order = routes[cardists[i].index];
+		vector<int>& order = routes[cardists[i].index];
 		order_res.push_back(order);
 		order.push_back(0);
 		order.push_back(0);
-		for(idx_t i = order.size() - 1; i >= 2; -- i) order[i] = order[i - 2];
+		for(int i = order.size() - 1; i >= 2; -- i) order[i] = order[i - 2];
 		order[0] = cars[carIndexes[cardists[i].index]].p.id;
 		order[1] = S;
 		routes_res.push_back(order);
 	}
-	for (idx_t i = 0; i < carIds_res.size(); ++ i) {
+	for (int i = 0; i < carIds_res.size(); ++ i) {
 		printf("%d car in %d node\n", carIds_res[i], cars[carIds_res[i]].p.id);
 		cout << "routes: ";
-		for (idx_t j = 0; j < routes_res[i].size(); j++) {
+		for (int j = 0; j < routes_res[i].size(); j++) {
 			cout << routes_res[i][j] << ", ";
 		}
 		cout << endl;
@@ -2840,15 +2843,70 @@ void searchTaxi(idx_t S, idx_t T, idx_t K, vector<idx_t> &carIds_res, vector<vec
 
 void runServer()
 {
-	idx_t start_no = 2345, dest_no = 2346;
+	int start_no = 2345, dest_no = 2346;
 	double tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2;
     double start_lngt, start_lat, dest_lngt, dest_lat;
 
-    idx_t serverSock = initSocket();
+    int serverSock = initSocket();
     char revBuf[MAX_NUM]={0};
     char sedBuf[MAX_NUM]={0};
+    string revMsg;
+    while(1)
+    {
+        int clientSock = accept(serverSock, NULL, NULL);
+		cout << "client found." << endl;
+        while(1) {
+            if(read(clientSock,revBuf,MAX_NUM) != -1) {
+                revMsg = revBuf;
+            } else {
+                break;
+            }
 
-      
+            cout << revMsg << endl;
+			if (revMsg.size() < 4) break;
+
+            parseData(revMsg, tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2);
+
+            cout << tmp_lngt1 << "," << tmp_lat1 << endl;
+            cout << tmp_lngt2 << "," << tmp_lat2 << endl;
+
+			int start_no = int(tmp_lngt1);
+			int dest_no = int(tmp_lngt2);
+            // start_no = getClose(tmp_lngt1, tmp_lat1, start_lngt, start_lat);
+            // dest_no = getClose(tmp_lngt2, tmp_lat2, dest_lngt, dest_lat);
+
+            cout << "road_net_no:" << endl;
+            cout << start_no << " " << dest_no << endl;
+			vector<int> carIds;
+            vector<vector<int>> routes;
+            vector<vector<int>> orders;
+            searchTaxi(start_no, dest_no, 5, carIds, routes, orders);
+			int m = carIds.size();
+			string tmpSed = "";
+			for (int i = 0; i < m; ++ i) {
+				vector<double> lngt;
+				vector<double> lat;
+				for (int j = 0; j < routes.size(); ++ j) {
+                    Position p = nodes[routes[i][j]];
+                    lngt.push_back(p.lg);
+					lat.push_back(p.lt);
+				}
+				string nowSed = codeData(lngt, lat);
+				tmpSed = tmpSed + nowSed;
+			}
+
+            for (int i = 0; i <= tmpSed.size(); ++ i) {
+				sedBuf[i] = (i == tmpSed.size()) ? 0 : tmpSed[i];
+			}
+            if (write(clientSock, sedBuf, sizeof(sedBuf)) == -1) {
+                printf("Send error!\n");
+            }
+            bzero(revBuf,sizeof(revBuf));
+            bzero(sedBuf,sizeof(sedBuf));
+        }
+        close(clientSock);
+    }
+    close(serverSock);
 }
 
 
@@ -2860,12 +2918,14 @@ void runServer()
 int main()
 {
 	if (SAVE == 1) {
+		TIME_TICK_START
 		init();
 		read();
 		Additional_Memory=2*G.n*log2(G.n);
 		printf("G.real_border:%d\n",G.real_node());
 		tree.build();
-
+		TIME_TICK_END
+		TIME_TICK_PRINT("build")
 		save();
 		cout << "root-part=" << rootp << endl;
 	}
