@@ -230,14 +230,14 @@ double Euclidean_Dist(idx_t S,idx_t T)//计算节点S,T的欧几里得距离在�
 struct Graph//无向图结构
 {
 	idx_t n,m;//n个点m条边 点从0编号到n-1
-	idx_t tot;
+	idx_t totnum;
 	vector<idx_t>id;//id[i]为子图中i点在原图中的真实编号
 	vector<idx_t>head,list,next,cost;//邻接表
 	Graph(){clear();}
 	~Graph(){clear();}
 	void save()//保存结构信息(stdout输出)
 	{
-		printf("%d %d %d\n",n,m,tot);
+		printf("%d %d %d\n",n,m,totnum);
 		save_vector(id);
 		save_vector(head);
 		save_vector(list);
@@ -246,7 +246,7 @@ struct Graph//无向图结构
 	}
 	void load()//读取结构信息(stdout输出)
 	{
-		scanf("%d%d%d",&n,&m,&tot);
+		scanf("%d%d%d",&n,&m,&totnum);
 		load_vector(id);
 		load_vector(head);
 		load_vector(list);
@@ -255,11 +255,11 @@ struct Graph//无向图结构
 	}
 	void add_D(idx_t a,idx_t b,idx_t c)//加入一条a->b权值为c的有向边
 	{
-		tot++;
-		list[tot]=b;
-		cost[tot]=c;
-		next[tot]=head[a];
-		head[a]=tot;
+		totnum++;
+		list[totnum]=b;
+		cost[totnum]=c;
+		next[totnum]=head[a];
+		head[a]=totnum;
 	}
 	void add(idx_t a,idx_t b,idx_t c)//加入一条a<->b权值为c的无向边
 	{
@@ -270,7 +270,7 @@ struct Graph//无向图结构
 	{
 		clear();
 		n=N;m=M;
-		tot=t;
+		totnum=t;
 		head=vector<idx_t>(N);
 		id=vector<idx_t>(N);
 		list=vector<idx_t>(M*2+2);
@@ -279,7 +279,7 @@ struct Graph//无向图结构
 	}
 	void clear()
 	{
-		n=m=tot=0;
+		n=m=totnum=0;
 		head.clear();
 		list.clear();
 		next.clear();
@@ -342,8 +342,8 @@ struct Graph//无向图结构
 			//transform
 			idx_t *xadj = new idx_t[n + 1];
 			idx_t *adj=new idx_t[n+1];
-			idx_t *adjncy = new idx_t[tot-1];
-			idx_t *adjwgt = new idx_t[tot-1];
+			idx_t *adjncy = new idx_t[totnum-1];
+			idx_t *adjwgt = new idx_t[totnum-1];
 			idx_t *part = new idx_t[n];
 
 
@@ -576,8 +576,8 @@ struct Graph//无向图结构
 		vector<idx_t>color(n);
 		idx_t *xadj = new idx_t[n + 1];
 		idx_t *adj=new idx_t[n+1];
-		idx_t *adjncy = new idx_t[tot-1];
-		idx_t *adjwgt = new idx_t[tot-1];
+		idx_t *adjncy = new idx_t[totnum-1];
+		idx_t *adjwgt = new idx_t[totnum-1];
 		idx_t *part = new idx_t[n];
 
 
@@ -1039,9 +1039,8 @@ struct G_Tree
 		while(l<r)
 		{
 			mid=(l+r+1)>>1;
-			idx_t num=node[x].G.Split_Borders(mid);
-			if(num*num>Additional_Memory)r=mid-1;
-			else l=mid;
+			//idx_t num=node[x].G.Split_Borders(mid);
+			l=mid;
 		}
 		return l;
 	}
@@ -2318,13 +2317,13 @@ struct G_Tree
 }tree;
 struct Wide_KNN_//增量法计算KNN，返回最近邻的K个点在增量序列中的编号，查询前通过init(S,K)初始化，增量时调用update(vector<pair<double,idx_t> > a)传入欧几里得距离/编号二元组，若增量成功返回true，此时可用result()得到结果
 {
-	idx_t S,K,bound,dist_now,tot;
+	idx_t S,K,bound,dist_now,totnum;
 	priority_queue<pair<idx_t,idx_t> >KNN;
 	double Euclid;idx_t Real_Dist;
 	vector<idx_t>re;
 	void init(idx_t s,idx_t k)
 	{
-		S=s;K=k;tot=0;
+		S=s;K=k;totnum=0;
 		Real_Dist=INF;Euclid=0;
 		while(KNN.size())KNN.pop();
 		re.clear();
@@ -2336,13 +2335,13 @@ struct Wide_KNN_//增量法计算KNN，返回最近邻的K个点在增量序列�
 		{
 			bound=KNN.size()<K?INF:KNN.top().first;
 			dist_now=tree.search_catch(S,a[i].second.first,bound)+a[i].second.second;
-			if(KNN.size()<K)KNN.push(make_pair(dist_now,tot));
+			if(KNN.size()<K)KNN.push(make_pair(dist_now,totnum));
 				else if(dist_now<KNN.top().first)
 				{
 					KNN.pop();
-					KNN.push(make_pair(dist_now,tot));
+					KNN.push(make_pair(dist_now,totnum));
 				}
-			tot++;
+			totnum++;
 			Real_Dist=bound;
 			Euclid=a[i].first;
 			if(Real_Dist<Euclid)
@@ -2740,7 +2739,7 @@ void loadCar() {
         idx_t nodeId;
         fin >>lg >> c >> lt >> c >> nodeId;
         Position carP(nodeId, lg, lt);
-        node2cars[nodeId].push_back(index);
+    //    node2cars[nodeId].push_back(index);
         car.p = carP;
         for (idx_t i = 0; i < pnum; i++) {
             fin >>lg >> c >> lt >> c >> nodeId;
@@ -2847,15 +2846,58 @@ void runServer()
     idx_t serverSock = initSocket();
     char revBuf[MAX_NUM]={0};
     char sedBuf[MAX_NUM]={0};
+	{
+		int start_no = 2345, dest_no = 2346;
+		double tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2;
+		double start_lngt, start_lat, dest_lngt, dest_lat;
 
-      
+		//int serverSock = initSocket();
+
+		string revMsg;
+		{
+			parseData(revMsg, tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2);
+
+			cout << tmp_lngt1 << "," << tmp_lat1 << endl;
+			cout << tmp_lngt2 << "," << tmp_lat2 << endl;
+
+			idx_t start_no = 1;
+			idx_t dest_no = 10;
+			// start_no = getClose(tmp_lngt1, tmp_lat1, start_lngt, start_lat);
+			// dest_no = getClose(tmp_lngt2, tmp_lat2, dest_lngt, dest_lat);
+
+			cout << "road_net_no:" << endl;
+			cout << start_no << " " << dest_no << endl;
+			vector<idx_t> carIds;
+			vector<vector<idx_t>> routes;
+			vector<vector<idx_t>> orders;
+			searchTaxi(start_no, dest_no, 5, carIds, routes, orders);
+			idx_t m = carIds.size();
+			string tmpSed = "";
+			for (idx_t i = 0; i < m; ++i) {
+				vector<double> lngt;
+				vector<double> lat;
+				for (idx_t j = 0; j < routes.size(); ++j) {
+					Position p = nodes[routes[i][j]];
+					lngt.push_back(p.lg);
+					lat.push_back(p.lt);
+				}
+				string nowSed = codeData(lngt, lat);
+				tmpSed = tmpSed + nowSed;
+			}
+
+			for (idx_t i = 0; i <= tmpSed.size(); ++i) {
+				sedBuf[i] = (i == tmpSed.size()) ? 0 : tmpSed[i];
+			}
+
+		}
+	}
 }
 
 
 // FIXME: send psgs include S, (to red).
 
 
-#define SAVE 0
+#define SAVE 1
 
 int main()
 {
@@ -2877,6 +2919,7 @@ int main()
 	loadNode();
 	loadCar();
     runServer();
+	printf("siuccess");
 
     return 0;
 }
