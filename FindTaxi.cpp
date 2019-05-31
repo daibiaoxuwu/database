@@ -9,7 +9,9 @@
 #include<map>
 #include<cmath>
 #include<queue>
-#include<sys/time.h>
+//#include<sys/time.h>
+
+#include <winsock2.h>
 #include<metis.h>
 #include<cassert>
 #include"mySocket.h"
@@ -37,7 +39,7 @@ const bool DEBUG1=false;
 #define TIME_TICK_START gettimeofday( &tv, NULL ); ts = tv.tv_sec * 100000 + tv.tv_usec / 10;
 #define TIME_TICK_END gettimeofday( &tv, NULL ); te = tv.tv_sec * 100000 + tv.tv_usec / 10;
 #define TIME_TICK_PRINT(T) printf("%s RESULT: %lld (0.01MS)\r\n", (#T), te - ts );
-struct timeval tv;
+//struct timeval tv;
 long long ts, te;
 static int rootp = 0;
 struct Heap//双指针大根堆
@@ -343,11 +345,11 @@ struct Graph//无向图结构
 			idx_t nvtxs=n;
 			idx_t ncon=1;
 			//transform
-			int *xadj = new idx_t[n + 1];
-			int *adj=new idx_t[n+1];
-			int *adjncy = new idx_t[tot-1];
-			int *adjwgt = new idx_t[tot-1];
-			int *part = new idx_t[n];
+			idx_t *xadj = new idx_t[n + 1];
+			idx_t *adj=new idx_t[n+1];
+			idx_t *adjncy = new idx_t[tot-1];
+			idx_t *adjwgt = new idx_t[tot-1];
+			idx_t *part = new idx_t[n];
 
 
 			int xadj_pos = 1;
@@ -393,7 +395,8 @@ struct Graph//无向图结构
 			}
 
 			// nparts
-			int objval=0;
+			idx_t objval=0;
+			idx_t idx_nparts = (idx_t)nparts;
 			//METIS
 			METIS_PartGraphKway(
 				&nvtxs,
@@ -403,7 +406,7 @@ struct Graph//无向图结构
 				NULL,
 				NULL,
 				adjwgt,
-				&nparts,
+				&idx_nparts,
 				NULL,
 				NULL,
 				options,
@@ -577,11 +580,11 @@ struct Graph//无向图结构
 		idx_t nvtxs=n;
 		idx_t ncon=1;
 		vector<int>color(n);
-		int *xadj = new idx_t[n + 1];
-		int *adj=new idx_t[n+1];
-		int *adjncy = new idx_t[tot-1];
-		int *adjwgt = new idx_t[tot-1];
-		int *part = new idx_t[n];
+		idx_t *xadj = new idx_t[n + 1];
+		idx_t *adj=new idx_t[n+1];
+		idx_t *adjncy = new idx_t[tot-1];
+		idx_t *adjwgt = new idx_t[tot-1];
+		idx_t *part = new idx_t[n];
 
 
 		int xadj_pos = 1;
@@ -605,7 +608,8 @@ struct Graph//无向图结构
 		for ( int i = 0; i < adjncy_pos; i++ ){
 			adjwgt[i] = 1;
 		}
-		int objval=0;
+		idx_t objval=0;
+		idx_t idx_nparts = (idx_t)nparts;
 		METIS_PartGraphKway(
 			&nvtxs,
 			&ncon,
@@ -614,7 +618,7 @@ struct Graph//无向图结构
 			NULL,
 			NULL,
 			adjwgt,
-			&nparts,
+			&idx_nparts,
 			NULL,
 			NULL,
 			options,
@@ -896,7 +900,7 @@ struct G_Tree
 		void load()
 		{
 			scanf("%d%d%d%d%d%d%d",&n,&father,&part,&deep,&catch_id,&catch_bound,&min_border_dist);
-			if(son!=NULL)delete[] son;
+//			if(son!=NULL)delete[] son;
 			son=new int[part];
 			for(int i=0;i<part;i++)scanf("%d",&son[i]);
 			load_vector(color);
@@ -920,7 +924,7 @@ struct G_Tree
 		void clear()
 		{
 			part=n=father=deep=0;
-			delete [] son;
+			//delete [] son;
 			dist.clear();
 			order.clear();
 			G.clear();
@@ -2743,7 +2747,7 @@ void loadCar() {
         int nodeId;
         fin >>lg >> c >> lt >> c >> nodeId;
         Position carP(nodeId, lg, lt);
-        node2cars[nodeId].push_back(index);
+      //  node2cars[nodeId].push_back(index);
         car.p = carP;
         for (int i = 0; i < pnum; i++) {
             fin >>lg >> c >> lt >> c >> nodeId;
@@ -2843,7 +2847,117 @@ void searchTaxi(int S, int T, int K, vector<int> &carIds_res, vector<vector<int>
 
 void runServer()
 {
-	int start_no = 2345, dest_no = 2346;
+	//初始化WSA  
+	WORD sockVersion = MAKEWORD(2, 2);
+	WSADATA wsaData;
+	if (WSAStartup(sockVersion, &wsaData) != 0)
+	{
+		return 0;
+	}
+
+	//创建套接字  
+	SOCKET slisten = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (slisten == INVALID_SOCKET)
+	{
+		printf("socket error !");
+		return 0;
+	}
+
+	//绑定IP和端口  
+	sockaddr_in sin;
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(8888);
+	sin.sin_addr.S_un.S_addr = INADDR_ANY;
+	if (bind(slisten, (LPSOCKADDR)&sin, sizeof(sin)) == SOCKET_ERROR)
+	{
+		printf("bind error !");
+	}
+
+	//开始监听  
+	if (listen(slisten, 5) == SOCKET_ERROR)
+	{
+		printf("listen error !");
+		return 0;
+	}
+
+	//循环接收数据  
+	SOCKET sClient;
+	sockaddr_in remoteAddr;
+	int nAddrlen = sizeof(remoteAddr);
+	char revData[255];
+	while (true)
+	{
+		printf("等待连接...\n");
+		sClient = accept(slisten, (SOCKADDR *)&remoteAddr, &nAddrlen);
+		if (sClient == INVALID_SOCKET)
+		{
+			printf("accept error !");
+			continue;
+		}
+		printf("接受到一个连接：%s \r\n", inet_ntoa(remoteAddr.sin_addr));
+
+		//接收数据  
+		int ret = recv(sClient, revData, 255, 0);
+		if (ret > 0)
+		{
+			revData[ret] = 0x00;
+			printf(revData);
+
+			cout << revMsg << endl;
+			if (revMsg.size() < 4) break;
+
+			parseData(revMsg, tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2);
+
+			cout << tmp_lngt1 << "," << tmp_lat1 << endl;
+			cout << tmp_lngt2 << "," << tmp_lat2 << endl;
+
+			int start_no = int(tmp_lngt1);
+			int dest_no = int(tmp_lngt2);
+			// start_no = getClose(tmp_lngt1, tmp_lat1, start_lngt, start_lat);
+			// dest_no = getClose(tmp_lngt2, tmp_lat2, dest_lngt, dest_lat);
+
+			cout << "road_net_no:" << endl;
+			cout << start_no << " " << dest_no << endl;
+			vector<int> carIds;
+			vector<vector<int>> routes;
+			vector<vector<int>> orders;
+			searchTaxi(start_no, dest_no, 5, carIds, routes, orders);
+			int m = carIds.size();
+			string tmpSed = "";
+			for (int i = 0; i < m; ++i) {
+				vector<double> lngt;
+				vector<double> lat;
+				for (int j = 0; j < routes.size(); ++j) {
+					Position p = nodes[routes[i][j]];
+					lngt.push_back(p.lg);
+					lat.push_back(p.lt);
+				}
+				string nowSed = codeData(lngt, lat);
+				tmpSed = tmpSed + nowSed;
+			}
+
+			for (int i = 0; i <= tmpSed.size(); ++i) {
+				sedBuf[i] = (i == tmpSed.size()) ? 0 : tmpSed[i];
+			}
+			if (write(clientSock, sedBuf, sizeof(sedBuf)) == -1) {
+				printf("Send error!\n");
+			}
+			bzero(revBuf, sizeof(revBuf));
+			bzero(sedBuf, sizeof(sedBuf));
+
+		}
+
+		//发送数据  
+		const char * sendData = "你好，TCP客户端！\n";
+		send(sClient, sendData, strlen(sendData), 0);
+		closesocket(sClient);
+	}
+
+	closesocket(slisten);
+	WSACleanup();
+	return;
+
+	/*int start_no = 2345, dest_no = 2346;
 	double tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2;
     double start_lngt, start_lat, dest_lngt, dest_lat;
 
@@ -2906,7 +3020,7 @@ void runServer()
         }
         close(clientSock);
     }
-    close(serverSock);
+    close(serverSock);*/
 }
 
 
@@ -2918,14 +3032,13 @@ void runServer()
 int main()
 {
 	if (SAVE == 1) {
-		TIME_TICK_START
+		
 		init();
 		read();
 		Additional_Memory=2*G.n*log2(G.n);
 		printf("G.real_border:%d\n",G.real_node());
 		tree.build();
-		TIME_TICK_END
-		TIME_TICK_PRINT("build")
+		
 		save();
 		cout << "root-part=" << rootp << endl;
 	}

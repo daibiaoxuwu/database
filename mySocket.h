@@ -4,12 +4,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <errno.h>
-#include <arpa/inet.h>
+
 #include <string>
 #include <vector>
 #include <cstring>
@@ -23,6 +18,6 @@ using namespace std;
 int initSocket();
 
 void parseData(string s, double &lngt1, double &lat1, double &lngt2, double &lat2);
-string codeData(vector<double> & lngt,vector<double> & lat);
+string codeData(vector<double> & lngt, vector<double> & lat);
 
 #endif
