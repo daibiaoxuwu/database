@@ -26,6 +26,10 @@ void parseData(string s, double &lngt1, double &lat1, double &lngt2, double &lat
 string codeData(vector<double> & lngt, vector<double> & lat)
 {
 	string res = "";
-
+	int n = lngt.size();
+	for (int i = 0; i < n; ++i) {
+		res = res + Convert(lngt[i]) + "," + Convert(lat[i]);
+		res += (i == n - 1) ? ";" : ",";
+	}
 	return res;
 }

@@ -1601,6 +1601,7 @@ struct G_Tree
 		//计算LCA
 		int i, j, k, p;
 		int LCA, x = id_in_node[S], y = id_in_node[T];
+		if (x >= node_size || y >= node_size)return INF;
 		if (node[x].deep<node[y].deep)swap(x, y);
 		while (node[x].deep>node[y].deep)x = node[x].father;
 		while (x != y){ x = node[x].father; y = node[y].father; }
@@ -2322,6 +2323,19 @@ struct G_Tree
 		}
 		return true;
 	}
+
+	int getClose(double lngt, double lat) {
+		double dist = INF, minnum = -1, num = 0;
+		for (coor i : coordinate) {
+			double newdist = Distance_(i.x, i.y, lngt, lat) / Unit;
+			if (newdist < dist) {
+				dist = newdist;
+				minnum = num;
+			}
+			num++;
+		}
+		return minnum;
+	}
 }tree;
 struct Wide_KNN_//增量法计算KNN，返回最近邻的K个点在增量序列中的编号，查询前通过init(S,K)初始化，增量时调用update(vector<pair<double,int> > a)传入欧几里得距离/编号二元组，若增量成功返回true，此时可用result()得到结果
 {
@@ -2391,7 +2405,7 @@ void read()
 	}
 	cout<<"correct4"<<endl;
 	fclose(in);
-	if(Optimization_Euclidean_Cut)
+	if(true)
 	{
 		in=fopen(Node_File,"r");
 		cout<<"correct1"<<endl;
@@ -2421,6 +2435,20 @@ void load()
 {
 	freopen("GP_Tree.data","r",stdin);
 	tree.load();
+	FILE* in = fopen(Node_File, "r");
+	cout << "correct1" << endl;
+	cout << "correct2" << endl;
+	cout << "correct3" << endl;
+	double d1, d2; int j;
+	for (int i = 0; i < G.n; i++)//读取边
+	{
+		//int temp;
+		fscanf(in, "%d %lf %lf\n", &j, &d1, &d2);
+		coordinate.push_back(coor(d1, d2));
+	}
+	cout << "correct4" << endl;
+	fclose(in);
+	printf("read over\n");
 	freopen("/dev/tty","r",stdin);
 }
 
@@ -2801,7 +2829,7 @@ void searchTaxi(int S, int T, int K, vector<int> &carIds_res, vector<vector<int>
 	cout << "Taxi searching begin." << endl;
 	int index = 0;
 	int total = cars.size();
-	for (int carIndex = 0; carIndex < total; carIndex++) {
+	for (int carIndex = 0; carIndex < total && index < 5; carIndex++) {
 		Car car = cars[carIndex];
 		if (car.pnum >= 4) continue;
 		int D2 = tree.search(car.p.id, S);
@@ -2814,8 +2842,8 @@ void searchTaxi(int S, int T, int K, vector<int> &carIds_res, vector<vector<int>
 		int D3 = findBestPath(car, order);
 		assert(D3 >= D4);
 		assert(D2 + D3 - D1[carIndex] >= 0);
-		if (D3 - D4 > 10000) continue;
-		if (D2 + D3 - D1[carIndex] > 10000) continue;
+		if (D3 - D4 > 100000) continue;
+		if (D2 + D3 - D1[carIndex] > 100000) continue;
 		routes.push_back(order);
 		carIndexes.push_back(carIndex);
 		cardists.push_back(Cardist(index, D2 + D3 - D1[carIndex] + D3 - D4));
@@ -2845,6 +2873,7 @@ void searchTaxi(int S, int T, int K, vector<int> &carIds_res, vector<vector<int>
 	}
 }
 
+
 void runServer()
 {
 	//初始化WSA  
@@ -2852,7 +2881,7 @@ void runServer()
 	WSADATA wsaData;
 	if (WSAStartup(sockVersion, &wsaData) != 0)
 	{
-		return 0;
+		return;
 	}
 
 	//创建套接字  
@@ -2860,7 +2889,7 @@ void runServer()
 	if (slisten == INVALID_SOCKET)
 	{
 		printf("socket error !");
-		return 0;
+		return;
 	}
 
 	//绑定IP和端口  
@@ -2877,7 +2906,7 @@ void runServer()
 	if (listen(slisten, 5) == SOCKET_ERROR)
 	{
 		printf("listen error !");
-		return 0;
+		return;
 	}
 
 	//循环接收数据  
@@ -2885,6 +2914,7 @@ void runServer()
 	sockaddr_in remoteAddr;
 	int nAddrlen = sizeof(remoteAddr);
 	char revData[255];
+	char sedBuf[255];
 	while (true)
 	{
 		printf("等待连接...\n");
@@ -2895,62 +2925,57 @@ void runServer()
 			continue;
 		}
 		printf("接受到一个连接：%s \r\n", inet_ntoa(remoteAddr.sin_addr));
-
-		//接收数据  
-		int ret = recv(sClient, revData, 255, 0);
-		if (ret > 0)
+		while (true)
 		{
-			revData[ret] = 0x00;
-			printf(revData);
+			//接收数据  
+			int ret = recv(sClient, revData, 255, 0);
+			if (ret > 0)
+			{
+				revData[ret] = 0x00;
+				printf(revData);
+				printf("\n");
+				double tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2;
+				sscanf(revData, "%lf,%lf,%lf,%lf", &tmp_lngt1, &tmp_lat1, &tmp_lngt2, &tmp_lat2);
+				printf("%lf,%lf,%lf,%lf\n", tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2);
+			//	int start_no = int(tmp_lngt1);
+			//	int dest_no = int(tmp_lngt2);
+				int start_no = tree.getClose(tmp_lngt1, tmp_lat1);
+				int dest_no = tree.getClose(tmp_lngt2, tmp_lat2);
 
-			cout << revMsg << endl;
-			if (revMsg.size() < 4) break;
-
-			parseData(revMsg, tmp_lngt1, tmp_lat1, tmp_lngt2, tmp_lat2);
-
-			cout << tmp_lngt1 << "," << tmp_lat1 << endl;
-			cout << tmp_lngt2 << "," << tmp_lat2 << endl;
-
-			int start_no = int(tmp_lngt1);
-			int dest_no = int(tmp_lngt2);
-			// start_no = getClose(tmp_lngt1, tmp_lat1, start_lngt, start_lat);
-			// dest_no = getClose(tmp_lngt2, tmp_lat2, dest_lngt, dest_lat);
-
-			cout << "road_net_no:" << endl;
-			cout << start_no << " " << dest_no << endl;
-			vector<int> carIds;
-			vector<vector<int>> routes;
-			vector<vector<int>> orders;
-			searchTaxi(start_no, dest_no, 5, carIds, routes, orders);
-			int m = carIds.size();
-			string tmpSed = "";
-			for (int i = 0; i < m; ++i) {
-				vector<double> lngt;
-				vector<double> lat;
-				for (int j = 0; j < routes.size(); ++j) {
-					Position p = nodes[routes[i][j]];
-					lngt.push_back(p.lg);
-					lat.push_back(p.lt);
+				cout << "road_net_no:" << endl;
+				cout << start_no << " " << dest_no << endl;
+				vector<int> carIds;
+				vector<vector<int>> routes;
+				vector<vector<int>> orders;
+				searchTaxi(start_no, dest_no, 5, carIds, routes, orders);
+				int m = carIds.size();
+				string tmpSed = "";
+				for (int i = 0; i < m; ++i) {
+					vector<double> lngt;
+					vector<double> lat;
+					for (int j = 0; j < routes[i].size(); ++j) {
+						Position p = nodes[routes[i][j]];
+						lngt.push_back(p.lg);
+						lat.push_back(p.lt);
+					}
+					string nowSed = codeData(lngt, lat);
+					tmpSed = tmpSed + nowSed;
 				}
-				string nowSed = codeData(lngt, lat);
-				tmpSed = tmpSed + nowSed;
-			}
 
-			for (int i = 0; i <= tmpSed.size(); ++i) {
-				sedBuf[i] = (i == tmpSed.size()) ? 0 : tmpSed[i];
-			}
-			if (write(clientSock, sedBuf, sizeof(sedBuf)) == -1) {
-				printf("Send error!\n");
-			}
-			bzero(revBuf, sizeof(revBuf));
-			bzero(sedBuf, sizeof(sedBuf));
+				for (int i = 0; i <= tmpSed.size(); ++i) {
+					sedBuf[i] = (i == tmpSed.size()) ? 0 : tmpSed[i];
+				}
+				//const char * sendData = "你好，TCP客户端！\n";
+				send(sClient, sedBuf, strlen(sedBuf), 0);
 
+
+
+			}
 		}
 
 		//发送数据  
-		const char * sendData = "你好，TCP客户端！\n";
-		send(sClient, sendData, strlen(sendData), 0);
-		closesocket(sClient);
+		
+	//	closesocket(sClient);
 	}
 
 	closesocket(slisten);
