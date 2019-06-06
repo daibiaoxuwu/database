@@ -9,12 +9,11 @@
 #include<map>
 #include<cmath>
 #include<queue>
-//#include<sys/time.h>
+#include <sstream>
 
 #include <winsock2.h>
 #include<metis.h>
 #include<cassert>
-#include"mySocket.h"
 int times[10];//辅助计时变量；
 int cnt_type0, cnt_type1;
 
@@ -42,6 +41,28 @@ const bool DEBUG1 = false;
 //struct timeval tv;
 long long ts, te;
 static int rootp = 0;
+
+
+string Convert(double x)
+{
+
+	ostringstream out;
+	out.precision(10);//覆盖默认精度
+	out << x;
+	string str = out.str();
+	return str;
+}
+
+string codeData(vector<double> & lngt, vector<double> & lat)
+{
+	string res = "";
+	int n = lngt.size();
+	for (int i = 0; i < n; ++i) {
+		res = res + Convert(lngt[i]) + "," + Convert(lat[i]);
+		res += (i == n - 1) ? ";" : ",";
+	}
+	return res;
+}
 
 void save_vector(const vector<int> &v)
 {
